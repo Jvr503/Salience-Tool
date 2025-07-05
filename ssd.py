@@ -9,6 +9,40 @@ import numpy as np
 # Set the environment variable to the path of your Google Cloud credentials
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "/Users/javier/Salience/gen-lang-client-0125666263-e9763df6c096.json"
 
+# --- Inject Propellic Branding Styles ---
+st.markdown("""
+    <style>
+    html, body, [class*="css"] {
+        font-family: 'Montserrat', sans-serif;
+    }
+    .stButton>button {
+        background-color: #E21A6B;
+        color: white;
+        font-weight: bold;
+        border: none;
+        border-radius: 8px;
+        padding: 0.6em 1.4em;
+    }
+    .stButton>button:hover {
+        background-color: #c0175d;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+# --- Propellic Logo ---
+st.image("propellic-logo-png.png", width=180)
+
+# --- Header with eyebrow and title ---
+st.markdown("""
+    <div style="text-transform:uppercase; color:#E21A6B; font-weight:bold; font-size:14px; margin-bottom:0.5rem;">Salience Analyzer</div>
+    <h1 style='color:white; margin-top:0;'>Text Analysis with Google NLP</h1>
+""", unsafe_allow_html=True)
+
+# --- Text Inputs ---
+original_text = st.text_area("Paste the original content you want to analyze:", height=100)
+variation_text_1 = st.text_area("Paste the content for Variation 1 (optional):", height=100)
+variation_text_2 = st.text_area("Paste the content for Variation 2 (optional):", height=100)
+
 def analyze_text_salience(text):
     """Analyzes the text and returns entities with their salience scores."""
     client = language_v1.LanguageServiceClient()
@@ -22,15 +56,9 @@ def analyze_text_salience(text):
         }
     return entity_dict
 
-# Streamlit web interface
-st.title('Text Analysis with Google NLP')
-original_text = st.text_area("Paste the original content you want to analyze:", height=100)
-variation_text_1 = st.text_area("Paste the content for Variation 1 (optional):", height=100)
-variation_text_2 = st.text_area("Paste the content for Variation 2 (optional):", height=100)
-
+# --- Analyze Button ---
 if st.button('Analyze'):
     all_entities = {}
-    # Analyze each text and collect entities
     if original_text:
         all_entities["Original"] = analyze_text_salience(original_text)
     if variation_text_1:
@@ -38,47 +66,35 @@ if st.button('Analyze'):
     if variation_text_2:
         all_entities["Variation 2"] = analyze_text_salience(variation_text_2)
     
-    rows_list = []  # List to hold all rows
+    rows_list = []
     unique_entities = set(entity for text in all_entities.values() for entity in text)
     
     for entity in unique_entities:
         row = {"Entity": entity, "Type": None, "Original": None, "Variation 1": None, "Variation 2": None}
-        salience_scores = []  # Collect salience scores for calculating the average
+        salience_scores = []
         for text_version, entities in all_entities.items():
             if entity in entities:
-                # Round the salience score to two decimal places before adding it to the row
                 salience_score = round(entities[entity]["Salience"], 2)
                 row["Type"] = entities[entity]["Type"]
-                row[text_version] = salience_score  # Store the rounded score
+                row[text_version] = salience_score
                 salience_scores.append(salience_score)
-        # Calculate the average and round it to two decimal places
         row["Average Salience"] = round(np.mean(salience_scores), 2) if salience_scores else None
         rows_list.append(row)
-    
-    # Create DataFrame from the list of rows
+
     comparison_df = pd.DataFrame(rows_list)
-    
-    # Sort the DataFrame based on the 'Average Salience' column in descending order
     comparison_df = comparison_df.sort_values(by="Average Salience", ascending=False)
-    
-    # Optionally, you can drop the 'Average Salience' column if you don't want to display it
     comparison_df = comparison_df.drop(columns=["Average Salience"])
     
-    # Convert all numerical values to strings to ensure consistent data types across the DataFrame
     for col in ["Original", "Variation 1", "Variation 2"]:
-        if col in comparison_df.columns:  # Check if the column exists to avoid KeyErrors
-            # Convert to string with two decimal places, but leave NaN/None as an empty string
+        if col in comparison_df.columns:
             comparison_df[col] = comparison_df[col].apply(lambda x: "" if pd.isna(x) else f"{x:.2f}")
-
-    # Convert all numerical values to strings to ensure consistent data types across the DataFrame
+    
     for col in ["Original", "Variation 1", "Variation 2", "Average Salience"]:
-        if col in comparison_df.columns:  # Check if the column exists to avoid KeyErrors
+        if col in comparison_df.columns:
             comparison_df[col] = comparison_df[col].apply(lambda x: f"{x:.2f}" if isinstance(x, float) else x)
-    
-    # Fill NA/None values with an empty string
+
     comparison_df = comparison_df.fillna("")
-    
-    # Display the comparison table
+
     if not comparison_df.empty:
         st.table(comparison_df)
     else:
