@@ -1,8 +1,5 @@
 # Salience-Tool
 The tool uses the Google Cloud Natural Language API to extract named entities from text and evaluate their salience score—which measures how important each entity is to the overall meaning of the text.
-# Salience Tool
-
-The Salience Tool uses the Google Cloud Natural Language API to extract named entities from text and evaluate their salience score—measuring how important each entity is to the overall meaning of the text.
 
 This app includes custom branding and UI styling for Propellic, along with a simple, intuitive interface built using Streamlit.
 
