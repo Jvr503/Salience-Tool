@@ -20,9 +20,6 @@ Make sure you have Python 3.7+ installed, then install dependencies:
 
 pip install -r requirements.txt
 
-yaml
-Copy
-Edit
 
 Also required:
 - A Google Cloud project with the Natural Language API enabled
@@ -37,17 +34,10 @@ Also required:
 
 export GOOGLE_APPLICATION_CREDENTIALS="gen-lang-client-xxxxxxxxxxxxx.json"
 
-markdown
-Copy
-Edit
-
 3. Start the app:
 
 streamlit run ssd.py
 
-yaml
-Copy
-Edit
 
 The app will open in your browser at `http://localhost:8501`.
 
@@ -64,9 +54,6 @@ The app will open in your browser at `http://localhost:8501`.
 ├── README.md
 └── .streamlit/ # (Optional) Streamlit config folder
 
-yaml
-Copy
-Edit
 
 ---
 
