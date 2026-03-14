@@ -1,71 +1,146 @@
-# Salience-Tool
-*Not Finished Yet*
+# Salience Tool
 
-The tool uses the Google Cloud Natural Language API to extract named entities from text and evaluate their salience score—which measures how important each entity is to the overall meaning of the text.
-
-This app includes custom branding and UI styling for Propellic, along with a simple, intuitive interface built using Streamlit.
+A Propellic internal tool for analyzing and optimizing entity salience scores using the Google Cloud Natural Language API. Paste or load page content, compare up to three versions of a text, generate AI-optimized rewrites with Claude, and export results to CSV.
 
 ---
 
-### Features
+## What It Does
 
-- Compare up to 3 versions of a text
-- Extract and rank named entities by salience
-- View salience scores in a sortable table
-- Branded interface with Propellic logo and colors
+Google's Natural Language API assigns each named entity in a piece of text a **salience score** (0–1) that measures how central that entity is as the subject of the text. A score of 0.60+ means the entity clearly dominates; below 0.20 means it barely registers.
+
+This tool lets you:
+- Score the original text from any URL or pasted copy
+- Generate Claude-optimized rewrites that push a target entity to #1 salience
+- Compare Original, Variation 1, and Variation 2 side by side in a sortable table
+- Export results to CSV for reporting
+
+**Salience Score Guide**
+
+| Score | Meaning |
+|-------|---------|
+| 0.60+ | Excellent — entity clearly dominates |
+| 0.40–0.59 | Good — strong signal, room to improve |
+| 0.20–0.39 | Moderate — competing entities dilute focus |
+| < 0.20 | Weak — entity is not the clear subject |
 
 ---
 
-### Requirements
+## Requirements
 
-Make sure you have Python 3.7+ installed, then install dependencies:
+- Python 3.10+
+- A Google Cloud project with the **Natural Language API** enabled
+- A Google Cloud service account key JSON file
+- An **Anthropic API key** (for Claude-powered rewrites)
 
+Install dependencies:
+
+```bash
 pip install -r requirements.txt
-
-
-Also required:
-- A Google Cloud project with the Natural Language API enabled
-- A service account key JSON file downloaded from your project
+```
 
 ---
 
-### How to Run
+## Setup
 
-1. Place your Google Cloud key file in the project folder (not tracked by Git)
-2. Set the environment variable in your terminal:
+### 1. Google Cloud credentials
 
-export GOOGLE_APPLICATION_CREDENTIALS="gen-lang-client-xxxxxxxxxxxxx.json"
+Place your service account key JSON file in the project folder (it is git-ignored). The file is named `gen-lang-client-*.json`.
 
-3. Start the app:
+### 2. Environment variables
 
+Create a `.env` file in the project root (also git-ignored):
+
+```
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+The `GOOGLE_APPLICATION_CREDENTIALS` path is set automatically by `run-salience.sh`. If running manually, export it yourself:
+
+```bash
+export GOOGLE_APPLICATION_CREDENTIALS="/path/to/gen-lang-client-*.json"
+```
+
+---
+
+## How to Run
+
+### Recommended — use the launch script:
+
+```bash
+./run-salience.sh
+```
+
+This activates the virtual environment, sets credentials, and starts Streamlit in one step.
+
+### Manual:
+
+```bash
+source venv314/bin/activate
+export GOOGLE_APPLICATION_CREDENTIALS="/path/to/gen-lang-client-*.json"
 streamlit run ssd.py
+```
 
-
-The app will open in your browser at `http://localhost:8501`.
-
----
-
-### Project Structure
-
-.
-├── ssd.py # Streamlit app
-├── requirements.txt # Dependencies
-├── propellic-logo-png.png # Custom branding
-├── .gitignore # Ignores JSON keys and cache files
-├── LICENSE
-├── README.md
-└── .streamlit/ # (Optional) Streamlit config folder
-
+The app opens at `http://localhost:8501` (or the next available port).
 
 ---
 
-### Author
+## How to Use
 
-Created by Javier Hernandez  
-Branded for Propellic
+### Step 1 — Load content
+- **Paste text tab**: Paste the original copy you want to analyze directly.
+- **Load from URL tab**: Enter a page URL and click "Load page elements". The tool extracts the H1 and first sentence after it and pre-fills the original text box. It also shows the meta title and meta description for reference.
+
+### Step 2 — Set up variations
+Two bordered sections appear below the tabs — one for each variation:
+
+- **Variation 1 / Variation 2**: Type your target entity (e.g. "Napa Valley") and either paste your own rewrite or use Claude to generate one.
+
+### Step 3 — Generate with Claude (optional)
+1. Select which variation to target using the **"Generate with Claude for"** radio buttons
+2. Click **"Generate with Claude"**
+
+Claude will rewrite the original text to make the target entity the dominant subject — placed early, used as the grammatical subject of most sentences, and repeated naturally. Rewrites are kept the same length or shorter (no padding).
+
+### Step 4 — Analyze
+Click **"Analyze"** to call the Google NLP API and score all provided texts. A sortable table shows every entity with its salience score across Original, Variation 1, and Variation 2.
+
+Click any row in the table to assign that entity as the target for the currently selected variation.
+
+### Step 5 — Export
+Click **"Export to CSV"** to download the full results table with the source URL prepended.
 
 ---
 
-### License
+## Project Structure
 
-This project is licensed under the MIT License.
+```
+├── ssd.py                          # Main Streamlit application
+├── run-salience.sh                 # Launch script (activates venv + sets credentials)
+├── requirements.txt                # Python dependencies
+├── propellic-logo-png.png          # Branding asset
+├── ssd_WORKING_BACKUP.py           # Pre-refactor backup
+├── .env                            # API keys (git-ignored)
+├── gen-lang-client-*.json          # Google Cloud key (git-ignored)
+├── .gitignore
+└── README.md
+```
+
+---
+
+## Dependencies
+
+| Package | Purpose |
+|---------|---------|
+| `streamlit>=1.35.0` | UI framework |
+| `google-cloud-language` | Entity salience scoring via Google NLP API |
+| `anthropic` | Claude API for AI-powered rewrites |
+| `beautifulsoup4` | HTML parsing for URL loading |
+| `requests` | HTTP fetching |
+| `pandas` / `numpy` | Data handling and table display |
+| `python-dotenv` | `.env` file loading |
+
+---
+
+## Author
+
+Created by Javier Hernandez — Propellic
