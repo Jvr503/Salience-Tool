@@ -1,8 +1,8 @@
-streamlit
+streamlit>=1.35.0
 google-cloud-language
 pandas
 numpy
-streamlit>=1.35.0
-google-genai
+anthropic
 python-dotenv
 beautifulsoup4
+requests
