@@ -120,21 +120,39 @@ st.markdown(
 def get_claude_client(api_key: str) -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=api_key)
 
-def generate_optimized_text(original: str, target_entity: str) -> str:
+# Short elements (H1, meta title) — stay as headings, no expansion
+_SHORT_ELEMENTS = {"H1", "Meta title"}
+
+def generate_optimized_text(original: str, target_entity: str, source_label: str = "Pasted text") -> str:
     client = get_claude_client(ANTHROPIC_API_KEY)
 
-    prompt = f"""You are optimizing text for Google Cloud Natural Language API entity salience.
+    if source_label in _SHORT_ELEMENTS:
+        word_count = len(original.split())
+        prompt = f"""You are optimizing a {source_label} for Google Cloud Natural Language API entity salience.
+
+Goal: Rewrite this {source_label} so that "{target_entity}" is the #1 entity by salience.
+
+Rules:
+1) This is a {source_label} — keep it as a short heading. Do NOT write a sentence or paragraph.
+2) Keep the output at roughly {word_count} words (±2 words maximum). Never expand it.
+3) Place "{target_entity}" as the first or second word of the heading.
+4) Remove or demote any competing named entities — replace them with generic descriptors if needed (e.g. "the spa", "the resort", "the winery").
+5) Return ONLY the rewritten {source_label}. No punctuation at the end unless the original had it. No explanation.
+
+Original {source_label}:
+{original}""".strip()
+    else:
+        prompt = f"""You are optimizing text for Google Cloud Natural Language API entity salience.
 
 Goal: When analyzed with Google NLP analyze_entities, the entity named exactly "{target_entity}" must be the #1 entity by salience, and it should clearly dominate any other entity.
 
 Rewrite rules:
 1) Put "{target_entity}" in the first sentence, within the first 8–10 words.
 2) Make "{target_entity}" the grammatical subject of most sentences (active voice). Avoid making any other named entity the subject.
-3) Repeat the exact string "{target_entity}" at least 4 times (min 3 for very short text), spread across the text. Do not replace all repeats with pronouns or synonyms.
-4) Demote competing entities: keep other named entities to 0 when possible. If you must keep one from the original, mention it at most once, avoid capitals unless required, and rewrite it as a generic reference (for example "the winery", "the region", "the tasting room") after the first mention.
-5) Increase topical cohesion around "{target_entity}": after the first mention, add a short clarifying phrase (appositive) that describes what it is (5–12 words). Keep the rest of the text consistently about "{target_entity}" (no topic switches, no long lists).
-6) Do not introduce any new named entities that were not already in the original text.
-7) Keep the rewrite the same length or shorter — do NOT expand the original text. Tighter, more focused writing scores better.
+3) Use the exact string "{target_entity}" multiple times naturally — do not replace all mentions with pronouns or synonyms.
+4) Demote competing entities: keep other named entities to a minimum. If you must keep one from the original, rewrite it as a generic reference (e.g. "the resort", "the region", "the tasting room") after the first mention.
+5) Do not introduce any new named entities that were not already in the original text.
+6) Keep the rewrite the same length or shorter — do NOT expand the original text. Tighter, more focused writing scores better.
 
 Keep meaning and tone. Keep it natural and readable.
 
@@ -145,7 +163,7 @@ Original text:
 
     message = client.messages.create(
         model=CLAUDE_MODEL,
-        max_tokens=1024,
+        max_tokens=512,
         messages=[{"role": "user", "content": prompt}],
     )
     return message.content[0].text.strip()
@@ -165,6 +183,8 @@ defaults = {
     "variation_text_2": "",
     "target_entity_1": "",
     "target_entity_2": "",
+    "variation_source_1": "Pasted text",
+    "variation_source_2": "Pasted text",
     "assign_to": "Variation 1",
 }
 for k, v in defaults.items():
@@ -225,6 +245,16 @@ with tab_paste:
         key="original_text",
     )
 
+# Source options for the element selector
+_SOURCE_OPTIONS = ["Pasted text", "H1", "First sentence after H1", "Meta title", "Meta description"]
+_SOURCE_KEY_MAP = {
+    "Pasted text": "original_text",
+    "H1": "url_h1",
+    "First sentence after H1": "url_first_sentence",
+    "Meta title": "url_meta_title",
+    "Meta description": "url_meta_description",
+}
+
 # -----------------------------
 # Variation 1 — clearly grouped
 # -----------------------------
@@ -235,6 +265,12 @@ with st.container(border=True):
         "Target entity for Variation 1",
         key="target_entity_1",
         placeholder="e.g. Napa Valley",
+    )
+    st.selectbox(
+        "Element to optimize",
+        options=_SOURCE_OPTIONS,
+        key="variation_source_1",
+        help="Choose which page element Claude should rewrite. URL elements are available after loading a URL above.",
     )
     st.text_area(
         "Variation 1 text (paste manually or click Generate below):",
@@ -251,6 +287,12 @@ with st.container(border=True):
         "Target entity for Variation 2",
         key="target_entity_2",
         placeholder="e.g. Sonoma County",
+    )
+    st.selectbox(
+        "Element to optimize",
+        options=_SOURCE_OPTIONS,
+        key="variation_source_2",
+        help="Choose which page element Claude should rewrite. URL elements are available after loading a URL above.",
     )
     st.text_area(
         "Variation 2 text (paste manually or click Generate below):",
@@ -275,15 +317,17 @@ def on_generate_with_claude():
         st.session_state["claude_error"] = "ANTHROPIC_API_KEY is not set. Add it to .env and restart."
         return
 
-    target = (
-        st.session_state["target_entity_1"]
-        if st.session_state["assign_to"] == "Variation 1"
-        else st.session_state["target_entity_2"]
-    )
-    original = st.session_state.get("original_text", "")
+    is_v1 = st.session_state["assign_to"] == "Variation 1"
+    target = st.session_state["target_entity_1"] if is_v1 else st.session_state["target_entity_2"]
+    source_label = st.session_state["variation_source_1"] if is_v1 else st.session_state["variation_source_2"]
+    source_key = _SOURCE_KEY_MAP[source_label]
+    original = st.session_state.get(source_key, "")
 
     if not original.strip():
-        st.session_state["claude_error"] = "Paste original text first (or load a URL)."
+        st.session_state["claude_error"] = (
+            f'No text found for "{source_label}". '
+            + ("Paste text in the Paste tab first." if source_key == "original_text" else "Load a URL first.")
+        )
         return
 
     if not target.strip():
@@ -293,7 +337,7 @@ def on_generate_with_claude():
     st.session_state["claude_error"] = ""
 
     try:
-        new_text = generate_optimized_text(original, target)
+        new_text = generate_optimized_text(original, target, source_label)
     except Exception as e:
         st.session_state["claude_error"] = f"Claude request failed: {e}"
         return
@@ -345,16 +389,56 @@ def analyze_text_salience(text: str) -> dict:
 if "display_df" not in st.session_state:
     st.session_state["display_df"] = None
 
+def _score_color(val: float) -> str:
+    if val >= 0.60: return "#16a34a"
+    if val >= 0.40: return "#ca8a04"
+    if val >= 0.20: return "#ea580c"
+    return "#dc2626"
+
+def _score_cell(val) -> str:
+    if val is None or (isinstance(val, float) and np.isnan(val)):
+        return '<td class="sc-num">—</td>'
+    color = _score_color(val)
+    return f'<td class="sc-num"><span style="color:{color}">●</span> {val:.2f}</td>'
+
+def build_score_table(df: pd.DataFrame) -> str:
+    score_cols = {"Original", "Variation 1", "Variation 2"}
+    headers = "".join(
+        f'<th class="sc-h sc-num">{c}</th>' if c in score_cols else f'<th class="sc-h">{c}</th>'
+        for c in df.columns
+    )
+    rows_html = ""
+    for i, (_, row) in enumerate(df.iterrows()):
+        bg = "rgba(255,255,255,0.03)" if i % 2 == 0 else "transparent"
+        cells = ""
+        for col in df.columns:
+            if col in score_cols:
+                cells += _score_cell(row[col])
+            else:
+                val = row[col] if row[col] is not None else "—"
+                cells += f'<td class="sc-td">{val}</td>'
+        rows_html += f'<tr style="background:{bg}">{cells}</tr>'
+    return f"""
+<style>
+  .sc-table {{width:100%;border-collapse:collapse;font-size:13px;font-family:'Montserrat',sans-serif;}}
+  .sc-h {{text-align:left;padding:8px 12px;border-bottom:1px solid rgba(255,255,255,0.12);
+          color:rgba(255,255,255,0.55);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;}}
+  .sc-h.sc-num {{text-align:right;}}
+  .sc-td {{padding:7px 12px;border-bottom:1px solid rgba(255,255,255,0.05);color:rgba(255,255,255,0.9);}}
+  .sc-num {{text-align:right;padding:7px 12px;border-bottom:1px solid rgba(255,255,255,0.05);
+            color:rgba(255,255,255,0.9);font-variant-numeric:tabular-nums;}}
+</style>
+<table class="sc-table"><thead><tr>{headers}</tr></thead><tbody>{rows_html}</tbody></table>
+"""
+
 def assign_selected_entity():
     df = st.session_state.get("display_df")
     table_state = st.session_state.get("entity_table")
     if df is None or table_state is None:
         return
-
     rows = table_state.selection.rows
     if not rows:
         return
-
     selected_entity = df.iloc[rows[0]]["Entity"]
     if st.session_state.get("assign_to") == "Variation 1":
         st.session_state["target_entity_1"] = selected_entity
@@ -409,18 +493,30 @@ if st.session_state.get("display_df") is not None:
         <div style="background:rgba(226,26,107,0.08); border-left:4px solid #E21A6B;
                     padding:10px 14px; border-radius:4px; font-size:13px; margin:12px 0;">
           <strong>Salience Score Guide</strong> &nbsp;—&nbsp;
-          <span style="color:#16a34a">●</span> <strong>0.60+</strong>&nbsp;Excellent: entity clearly dominates &nbsp;
-          <span style="color:#ca8a04">●</span> <strong>0.40–0.59</strong>&nbsp;Good: strong signal &nbsp;
-          <span style="color:#ea580c">●</span> <strong>0.20–0.39</strong>&nbsp;Moderate: competing entities dilute focus &nbsp;
-          <span style="color:#dc2626">●</span> <strong>&lt; 0.20</strong>&nbsp;Weak: entity is not the clear subject
+          <span style="color:#16a34a; font-weight:600">0.60+</span>&nbsp;Excellent: entity clearly dominates &nbsp;
+          <span style="color:#ca8a04; font-weight:600">0.40–0.59</span>&nbsp;Good: strong signal &nbsp;
+          <span style="color:#ea580c; font-weight:600">0.20–0.39</span>&nbsp;Moderate: competing entities dilute focus &nbsp;
+          <span style="color:#dc2626; font-weight:600">&lt; 0.20</span>&nbsp;Weak: entity is not the clear subject
         </div>
         """,
         unsafe_allow_html=True,
     )
 
     display_df = st.session_state["display_df"]
+
+    def style_score(val):
+        if val is None or (isinstance(val, float) and np.isnan(val)):
+            return ""
+        if val >= 0.60: return "color: #16a34a; font-weight: 600"
+        if val >= 0.40: return "color: #ca8a04; font-weight: 600"
+        if val >= 0.20: return "color: #ea580c; font-weight: 600"
+        return "color: #dc2626; font-weight: 600"
+
+    score_cols = [c for c in ["Original", "Variation 1", "Variation 2"] if c in display_df.columns]
+    styled = display_df.style.map(style_score, subset=score_cols)
+
     st.dataframe(
-        display_df,
+        styled,
         use_container_width=True,
         hide_index=True,
         on_select=assign_selected_entity,
@@ -433,7 +529,6 @@ if st.session_state.get("display_df") is not None:
         },
     )
 
-    # Export: add URL column and download as CSV
     export_df = display_df.copy()
     page_url = st.session_state.get("page_url", "")
     export_df.insert(0, "URL", page_url if page_url.strip() else "—")
