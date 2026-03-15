@@ -93,21 +93,32 @@ The app opens at `http://localhost:8501` (or the next available port).
 ### Step 2 — Set up variations
 Two bordered sections appear below the tabs — one for each variation:
 
-- **Variation 1 / Variation 2**: Type your target entity (e.g. "Napa Valley") and either paste your own rewrite or use Claude to generate one.
+- **Target entity**: Type the entity you want to make dominant (e.g. "Napa Valley").
+- **Element to optimize**: Choose which page element Claude should rewrite — H1, First sentence after H1, Meta title, Meta description, or Pasted text. URL elements are only available after loading a URL.
+- **Variation text**: Paste your own rewrite manually, or leave it empty and use Claude to generate one.
 
 ### Step 3 — Generate with Claude (optional)
-1. Select which variation to target using the **"Generate with Claude for"** radio buttons
+1. Select which variation to generate using the **"Generate with Claude for"** radio buttons
 2. Click **"Generate with Claude"**
 
-Claude will rewrite the original text to make the target entity the dominant subject — placed early, used as the grammatical subject of most sentences, and repeated naturally. Rewrites are kept the same length or shorter (no padding).
+Claude rewrites the selected element to make the target entity the dominant subject. The behavior adapts based on element type:
+- **H1 / Meta title**: Stays as a short heading — same word count, entity placed first, no expansion.
+- **First sentence / Meta description / Pasted text**: Full paragraph rewrite — entity as grammatical subject, competing entities demoted, same length or shorter.
 
 ### Step 4 — Analyze
-Click **"Analyze"** to call the Google NLP API and score all provided texts. A sortable table shows every entity with its salience score across Original, Variation 1, and Variation 2.
+Click **"Analyze"** to call the Google NLP API and score all provided texts. A table shows every entity with its salience score across Original, Variation 1, and Variation 2. Scores are color-coded:
+
+| Color | Range | Meaning |
+|-------|-------|---------|
+| Green | 0.60+ | Excellent — entity clearly dominates |
+| Yellow | 0.40–0.59 | Good — strong signal |
+| Orange | 0.20–0.39 | Moderate — competing entities dilute focus |
+| Red | < 0.20 | Weak — entity is not the clear subject |
 
 Click any row in the table to assign that entity as the target for the currently selected variation.
 
 ### Step 5 — Export
-Click **"Export to CSV"** to download the full results table with the source URL prepended.
+Click **"Export to CSV"** to download the full results table (raw numeric scores) with the source URL prepended.
 
 ---
 
