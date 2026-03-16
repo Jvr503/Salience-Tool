@@ -1,6 +1,7 @@
 # Salience Tool — Propellic
 # Created by Javier Hernandez
 
+import base64
 import json
 import io
 import os
@@ -113,17 +114,19 @@ def copy_button(text: str, key: str = "") -> None:
     """Renders a clipboard copy button via JS component."""
     if not text.strip():
         return
-    escaped = json.dumps(text)
+    # base64-encode the text so it's safe to embed directly in an HTML attribute
+    # (avoids quote-escaping issues that break onclick when text contains " or ')
+    b64 = base64.b64encode(text.encode("utf-8")).decode("ascii")
     components.html(
         f"""<button
-          onclick="navigator.clipboard.writeText({escaped}).then(()=>{{
-            this.textContent='✓ Copied!';
-            setTimeout(()=>this.textContent='📋 Copy',2000);
+          onclick="var t=atob('{b64}');navigator.clipboard.writeText(t).then(()=>{{
+            this.textContent='&#10003; Copied!';
+            setTimeout(()=>this.textContent='&#128203; Copy',2000);
           }})"
           style="background:#E21A6B;color:white;border:none;border-radius:6px;
                  padding:5px 14px;cursor:pointer;font-size:12px;font-weight:bold;
                  font-family:Montserrat,sans-serif;">
-          📋 Copy
+          &#128203; Copy
         </button>""",
         height=38,
     )
@@ -262,6 +265,8 @@ defaults: dict = {
     "variation_source_1": "Pasted text",
     "variation_source_2": "Pasted text",
     "assign_to": "Variation 1",
+    "entity_picker_1": "",
+    "entity_picker_2": "",
     # Results
     "display_df": None,
     "claude_error": "",
@@ -324,6 +329,14 @@ def assign_selected_entity():
         st.session_state["target_entity_1"] = selected_entity
     else:
         st.session_state["target_entity_2"] = selected_entity
+
+
+def pick_entity(variation_num: int):
+    key = f"entity_picker_{variation_num}"
+    val = st.session_state.get(key, "")
+    if val:
+        st.session_state[f"target_entity_{variation_num}"] = val
+        st.session_state[key] = ""   # reset picker to placeholder
 
 
 def on_generate_with_claude():
@@ -492,7 +505,17 @@ with tab_single:
 
     with st.container(border=True):
         st.markdown("#### Variation 1")
-        st.text_input("Target entity for Variation 1", key="target_entity_1", placeholder="e.g. Napa Valley")
+        st.text_input("Target entity for Variation 1", key="target_entity_1", placeholder="Type any entity name…")
+        _df_for_picker = st.session_state.get("display_df")
+        if _df_for_picker is not None and not _df_for_picker.empty:
+            st.selectbox(
+                "Or pick from last analysis:",
+                options=[""] + _df_for_picker["Entity"].tolist(),
+                format_func=lambda x: "— pick an entity —" if x == "" else x,
+                key="entity_picker_1",
+                on_change=pick_entity, args=(1,),
+                label_visibility="collapsed",
+            )
         st.selectbox(
             "Element to optimize", options=_SOURCE_OPTIONS, key="variation_source_1",
             help="URL elements are available after loading a URL above.",
@@ -510,7 +533,16 @@ with tab_single:
 
     with st.container(border=True):
         st.markdown("#### Variation 2")
-        st.text_input("Target entity for Variation 2", key="target_entity_2", placeholder="e.g. Sonoma County")
+        st.text_input("Target entity for Variation 2", key="target_entity_2", placeholder="Type any entity name…")
+        if _df_for_picker is not None and not _df_for_picker.empty:
+            st.selectbox(
+                "Or pick from last analysis:",
+                options=[""] + _df_for_picker["Entity"].tolist(),
+                format_func=lambda x: "— pick an entity —" if x == "" else x,
+                key="entity_picker_2",
+                on_change=pick_entity, args=(2,),
+                label_visibility="collapsed",
+            )
         st.selectbox(
             "Element to optimize", options=_SOURCE_OPTIONS, key="variation_source_2",
             help="URL elements are available after loading a URL above.",
