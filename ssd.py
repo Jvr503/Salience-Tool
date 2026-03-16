@@ -1,5 +1,7 @@
-# Script created by Javier Hernandez to show the salience score of entities extracted from a text, using Google NLP API.
+# Salience Tool — Propellic
+# Created by Javier Hernandez
 
+import json
 import io
 import os
 import re
@@ -7,6 +9,8 @@ import requests
 import pandas as pd
 import numpy as np
 import streamlit as st
+import streamlit.components.v1 as components
+from datetime import datetime
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from google.cloud import language_v1
@@ -17,9 +21,8 @@ load_dotenv()
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-opus-4-6")
 
-# -----------------------------
-# Helper: first sentence
-# -----------------------------
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
 def first_sentence(text: str) -> str:
     text = re.sub(r"\s+", " ", (text or "").strip())
     if not text:
@@ -27,16 +30,14 @@ def first_sentence(text: str) -> str:
     parts = re.split(r"(?<=[.!?])\s+", text, maxsplit=1)
     return parts[0].strip()
 
-# -----------------------------
-# Helper: fetch URL elements
-# -----------------------------
+
 def fetch_page_elements(url: str) -> dict:
     headers = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari"
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome Safari"
     }
     r = requests.get(url, headers=headers, timeout=15)
     r.raise_for_status()
-
     soup = BeautifulSoup(r.text, "html.parser")
 
     meta_title = soup.title.get_text(strip=True) if soup.title else ""
@@ -67,12 +68,72 @@ def fetch_page_elements(url: str) -> dict:
         "prefill_original": "\n\n".join([t for t in [h1_text, fs] if t]),
     }
 
-# -----------------------------
-# Credentials checks
-# -----------------------------
+
+def analyze_text_salience(text: str) -> dict:
+    client = language_v1.LanguageServiceClient()
+    document = language_v1.Document(content=text, type_=language_v1.Document.Type.PLAIN_TEXT)
+    response = client.analyze_entities(document=document)
+    result = {}
+    for entity in response.entities:
+        result[entity.name] = {
+            "Type": language_v1.Entity.Type(entity.type_).name,
+            "Salience": float(entity.salience),
+        }
+    return result
+
+
+def top_entity(entities: dict):
+    if not entities:
+        return None, None
+    top = max(entities.items(), key=lambda x: x[1]["Salience"])
+    return top[0], top[1]["Salience"]
+
+
+def wc(text: str) -> int:
+    return len(text.split()) if text.strip() else 0
+
+
+def score_color(val: float) -> str:
+    if val >= 0.60: return "#16a34a"
+    if val >= 0.40: return "#ca8a04"
+    if val >= 0.20: return "#ea580c"
+    return "#dc2626"
+
+
+def style_score(val):
+    if val is None or (isinstance(val, float) and np.isnan(val)):
+        return ""
+    if val >= 0.60: return "color: #16a34a; font-weight: 600"
+    if val >= 0.40: return "color: #ca8a04; font-weight: 600"
+    if val >= 0.20: return "color: #ea580c; font-weight: 600"
+    return "color: #dc2626; font-weight: 600"
+
+
+def copy_button(text: str, key: str = "") -> None:
+    """Renders a clipboard copy button via JS component."""
+    if not text.strip():
+        return
+    escaped = json.dumps(text)
+    components.html(
+        f"""<button
+          onclick="navigator.clipboard.writeText({escaped}).then(()=>{{
+            this.textContent='✓ Copied!';
+            setTimeout(()=>this.textContent='📋 Copy',2000);
+          }})"
+          style="background:#E21A6B;color:white;border:none;border-radius:6px;
+                 padding:5px 14px;cursor:pointer;font-size:12px;font-weight:bold;
+                 font-family:Montserrat,sans-serif;">
+          📋 Copy
+        </button>""",
+        height=38,
+    )
+
+
+# ── Credentials ───────────────────────────────────────────────────────────────
+
 cred = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
 if not cred:
-    st.error("GOOGLE_APPLICATION_CREDENTIALS is not set. Add it to ~/.zprofile or .env, then restart the app.")
+    st.error("GOOGLE_APPLICATION_CREDENTIALS is not set. Add it to ~/.zprofile or .env, then restart.")
     st.stop()
 
 cred_path = os.path.expanduser(cred)
@@ -80,63 +141,30 @@ if not os.path.exists(cred_path):
     st.error(f"GOOGLE_APPLICATION_CREDENTIALS points to a missing file: {cred}")
     st.stop()
 
-# -----------------------------
-# Branding / UI
-# -----------------------------
-st.markdown(
-    """
-    <style>
-    html, body, [class*="css"] { font-family: 'Montserrat', sans-serif; }
-    .stButton>button {
-        background-color: #E21A6B;
-        color: white;
-        font-weight: bold;
-        border: none;
-        border-radius: 8px;
-        padding: 0.6em 1.4em;
-    }
-    .stButton>button:hover { background-color: #c0175d; }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+# ── Claude helpers ─────────────────────────────────────────────────────────────
 
-st.image("propellic-logo-png.png", width=180)
-
-st.markdown(
-    """
-    <div style="text-transform:uppercase; color:#E21A6B; font-weight:bold; font-size:14px; margin-bottom:0.5rem;">
-      Salience Analyzer
-    </div>
-    <h1 style='color:white; margin-top:0;'>Text Analysis with Google NLP</h1>
-    """,
-    unsafe_allow_html=True,
-)
-
-# -----------------------------
-# Claude helpers
-# -----------------------------
 @st.cache_resource
 def get_claude_client(api_key: str) -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=api_key)
 
-# Short elements (H1, meta title) — stay as headings, no expansion
+
 _SHORT_ELEMENTS = {"H1", "Meta title"}
+
 
 def generate_optimized_text(original: str, target_entity: str, source_label: str = "Pasted text") -> str:
     client = get_claude_client(ANTHROPIC_API_KEY)
 
     if source_label in _SHORT_ELEMENTS:
-        word_count = len(original.split())
+        word_cnt = len(original.split())
         prompt = f"""You are optimizing a {source_label} for Google Cloud Natural Language API entity salience.
 
 Goal: Rewrite this {source_label} so that "{target_entity}" is the #1 entity by salience.
 
 Rules:
 1) This is a {source_label} — keep it as a short heading. Do NOT write a sentence or paragraph.
-2) Keep the output at roughly {word_count} words (±2 words maximum). Never expand it.
+2) Keep the output at roughly {word_cnt} words (±2 words maximum). Never expand it.
 3) Place "{target_entity}" as the first or second word of the heading.
-4) Remove or demote any competing named entities — replace them with generic descriptors if needed (e.g. "the spa", "the resort", "the winery").
+4) Remove or demote any competing named entities — replace them with generic descriptors if needed.
 5) Return ONLY the rewritten {source_label}. No punctuation at the end unless the original had it. No explanation.
 
 Original {source_label}:
@@ -144,19 +172,17 @@ Original {source_label}:
     else:
         prompt = f"""You are optimizing text for Google Cloud Natural Language API entity salience.
 
-Goal: When analyzed with Google NLP analyze_entities, the entity named exactly "{target_entity}" must be the #1 entity by salience, and it should clearly dominate any other entity.
+Goal: The entity "{target_entity}" must be the #1 entity by salience when analyzed with Google NLP.
 
 Rewrite rules:
 1) Put "{target_entity}" in the first sentence, within the first 8–10 words.
-2) Make "{target_entity}" the grammatical subject of most sentences (active voice). Avoid making any other named entity the subject.
-3) Use the exact string "{target_entity}" multiple times naturally — do not replace all mentions with pronouns or synonyms.
-4) Demote competing entities: keep other named entities to a minimum. If you must keep one from the original, rewrite it as a generic reference (e.g. "the resort", "the region", "the tasting room") after the first mention.
-5) Do not introduce any new named entities that were not already in the original text.
-6) Keep the rewrite the same length or shorter — do NOT expand the original text. Tighter, more focused writing scores better.
+2) Make "{target_entity}" the grammatical subject of most sentences (active voice).
+3) Use the exact string "{target_entity}" multiple times naturally.
+4) Demote competing entities — rewrite them as generic references after the first mention.
+5) Do not introduce new named entities not in the original text.
+6) Same length or shorter — do NOT expand the original text.
 
-Keep meaning and tone. Keep it natural and readable.
-
-Output: Return ONLY the rewritten text. No headings. No explanation. No extra formatting. No **.
+Return ONLY the rewritten text. No explanation. No **.
 
 Original text:
 {original}""".strip()
@@ -168,17 +194,63 @@ Original text:
     )
     return message.content[0].text.strip()
 
-# -----------------------------
-# Session state defaults
-# -----------------------------
-defaults = {
+
+def suggest_entity_for_keyword(entities: list, keyword: str) -> str:
+    client = get_claude_client(ANTHROPIC_API_KEY)
+    entity_list = ", ".join(f'"{e}"' for e in entities[:20])
+    prompt = (
+        f'From this list of entities: {entity_list}\n\n'
+        f'Which single entity best represents or is most closely associated with the SEO keyword "{keyword}"?\n'
+        f'Reply with ONLY the entity name, exactly as written. No explanation.'
+    )
+    message = client.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=50,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return message.content[0].text.strip().strip('"')
+
+
+# ── Branding / CSS ─────────────────────────────────────────────────────────────
+
+st.markdown(
+    """
+    <style>
+    html, body, [class*="css"] { font-family: 'Montserrat', sans-serif; }
+    .stButton>button {
+        background-color: #E21A6B; color: white; font-weight: bold;
+        border: none; border-radius: 8px; padding: 0.6em 1.4em;
+    }
+    .stButton>button:hover { background-color: #c0175d; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.image("propellic-logo-png.png", width=180)
+st.markdown(
+    """
+    <div style="text-transform:uppercase;color:#E21A6B;font-weight:bold;font-size:14px;margin-bottom:0.5rem;">
+      Salience Analyzer
+    </div>
+    <h1 style='color:white;margin-top:0;'>Text Analysis with Google NLP</h1>
+    """,
+    unsafe_allow_html=True,
+)
+
+# ── Session state ──────────────────────────────────────────────────────────────
+
+defaults: dict = {
+    # URL tab
+    "page_url": "",
     "url_meta_title": "",
     "url_meta_description": "",
     "url_h1": "",
     "url_first_sentence": "",
-    "claude_error": "",
-    "page_url": "",
+    "url_element_scores": {},   # {key: {"entity": str, "score": float}}
+    # Paste tab
     "original_text": "",
+    # Variations
     "variation_text_1": "",
     "variation_text_2": "",
     "target_entity_1": "",
@@ -186,7 +258,20 @@ defaults = {
     "variation_source_1": "Pasted text",
     "variation_source_2": "Pasted text",
     "assign_to": "Variation 1",
+    # Results
+    "display_df": None,
+    "claude_error": "",
+    # Keyword suggestion
+    "target_keyword": "",
+    "keyword_suggestion": "",
+    # History
+    "session_history": [],
+    # Bulk
+    "bulk_urls_input": "",
+    "bulk_target_entity": "",
+    "bulk_results_df": None,
 }
+
 for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
@@ -194,58 +279,8 @@ for k, v in defaults.items():
 if st.session_state.get("assign_to") not in ["Variation 1", "Variation 2"]:
     st.session_state["assign_to"] = "Variation 1"
 
-# -----------------------------
-# Inputs (tabs) — original text only
-# -----------------------------
-tab_paste, tab_url = st.tabs(["Paste text", "Load from URL"])
+# ── Source options ─────────────────────────────────────────────────────────────
 
-with tab_url:
-    st.text_input("Page URL", key="page_url")
-
-    if st.button("Load page elements", key="load_page_elements"):
-        if not st.session_state["page_url"].strip():
-            st.error("Paste a URL first.")
-        else:
-            try:
-                data = fetch_page_elements(st.session_state["page_url"].strip())
-
-                st.session_state["url_meta_title"] = data.get("meta_title", "")
-                st.session_state["url_meta_description"] = data.get("meta_description", "")
-                st.session_state["url_h1"] = data.get("h1", "")
-                st.session_state["url_first_sentence"] = data.get("first_sentence_after_h1", "")
-                st.session_state["original_text"] = data.get("prefill_original", "")
-
-                st.rerun()
-            except Exception as e:
-                st.error(f"Failed to fetch URL: {e}")
-
-    if "url_meta_title_display" not in st.session_state:
-        st.session_state["url_meta_title_display"] = ""
-    if "url_meta_description_display" not in st.session_state:
-        st.session_state["url_meta_description_display"] = ""
-    if "url_h1_display" not in st.session_state:
-        st.session_state["url_h1_display"] = ""
-    if "url_first_sentence_display" not in st.session_state:
-        st.session_state["url_first_sentence_display"] = ""
-
-    st.session_state["url_meta_title_display"] = st.session_state["url_meta_title"]
-    st.session_state["url_meta_description_display"] = st.session_state["url_meta_description"]
-    st.session_state["url_h1_display"] = st.session_state["url_h1"]
-    st.session_state["url_first_sentence_display"] = st.session_state["url_first_sentence"]
-
-    st.text_input("Meta title", key="url_meta_title_display", disabled=True)
-    st.text_area("Meta description", key="url_meta_description_display", height=80, disabled=True)
-    st.text_input("H1", key="url_h1_display", disabled=True)
-    st.text_area("First sentence after H1", key="url_first_sentence_display", height=80, disabled=True)
-
-with tab_paste:
-    st.text_area(
-        "Paste the original content you want to analyze:",
-        height=100,
-        key="original_text",
-    )
-
-# Source options for the element selector
 _SOURCE_OPTIONS = ["Pasted text", "H1", "First sentence after H1", "Meta title", "Meta description"]
 _SOURCE_KEY_MAP = {
     "Pasted text": "original_text",
@@ -255,62 +290,33 @@ _SOURCE_KEY_MAP = {
     "Meta description": "url_meta_description",
 }
 
-# -----------------------------
-# Variation 1 — clearly grouped
-# -----------------------------
-st.markdown("---")
-with st.container(border=True):
-    st.markdown("#### Variation 1")
-    st.text_input(
-        "Target entity for Variation 1",
-        key="target_entity_1",
-        placeholder="e.g. Napa Valley",
-    )
-    st.selectbox(
-        "Element to optimize",
-        options=_SOURCE_OPTIONS,
-        key="variation_source_1",
-        help="Choose which page element Claude should rewrite. URL elements are available after loading a URL above.",
-    )
-    st.text_area(
-        "Variation 1 text (paste manually or click Generate below):",
-        height=100,
-        key="variation_text_1",
-    )
+# ── Callbacks ──────────────────────────────────────────────────────────────────
 
-# -----------------------------
-# Variation 2 — clearly grouped
-# -----------------------------
-with st.container(border=True):
-    st.markdown("#### Variation 2")
-    st.text_input(
-        "Target entity for Variation 2",
-        key="target_entity_2",
-        placeholder="e.g. Sonoma County",
-    )
-    st.selectbox(
-        "Element to optimize",
-        options=_SOURCE_OPTIONS,
-        key="variation_source_2",
-        help="Choose which page element Claude should rewrite. URL elements are available after loading a URL above.",
-    )
-    st.text_area(
-        "Variation 2 text (paste manually or click Generate below):",
-        height=100,
-        key="variation_text_2",
-    )
+def clear_all():
+    skip = {"session_history"}
+    for k, v in defaults.items():
+        if k not in skip:
+            st.session_state[k] = v if not isinstance(v, (dict, list)) else type(v)()
 
-st.markdown("---")
 
-# -----------------------------
-# Generate + Analyze controls
-# -----------------------------
-st.radio(
-    "Generate with Claude for:",
-    ["Variation 1", "Variation 2"],
-    horizontal=True,
-    key="assign_to",
-)
+def use_as_original(key: str):
+    st.session_state["original_text"] = st.session_state.get(key, "")
+
+
+def assign_selected_entity():
+    df = st.session_state.get("display_df")
+    table_state = st.session_state.get("entity_table")
+    if df is None or table_state is None:
+        return
+    rows = table_state.selection.rows
+    if not rows:
+        return
+    selected_entity = df.iloc[rows[0]]["Entity"]
+    if st.session_state.get("assign_to") == "Variation 1":
+        st.session_state["target_entity_1"] = selected_entity
+    else:
+        st.session_state["target_entity_2"] = selected_entity
+
 
 def on_generate_with_claude():
     if not ANTHROPIC_API_KEY:
@@ -329,214 +335,484 @@ def on_generate_with_claude():
             + ("Paste text in the Paste tab first." if source_key == "original_text" else "Load a URL first.")
         )
         return
-
     if not target.strip():
-        st.session_state["claude_error"] = "Pick or type a target entity first."
+        st.session_state["claude_error"] = "Enter a target entity first."
         return
 
     st.session_state["claude_error"] = ""
-
     try:
         new_text = generate_optimized_text(original, target, source_label)
     except Exception as e:
         st.session_state["claude_error"] = f"Claude request failed: {e}"
         return
 
-    if st.session_state["assign_to"] == "Variation 1":
+    if is_v1:
         st.session_state["variation_text_1"] = new_text
     else:
         st.session_state["variation_text_2"] = new_text
 
-col_gen, col_analyze = st.columns([1, 1])
+    st.toast("Text generated successfully.")
 
-with col_gen:
-    st.button(
-        "Generate with Claude",
-        on_click=on_generate_with_claude,
-        disabled=not bool(ANTHROPIC_API_KEY),
-    )
 
-if st.session_state.get("claude_error"):
-    st.error(st.session_state["claude_error"])
+# ── Score guide markdown ───────────────────────────────────────────────────────
 
-if not ANTHROPIC_API_KEY:
-    st.warning("ANTHROPIC_API_KEY is not set. Add it to .env and restart.")
-
-# Keep these variables available for the rest of the script
-original_text = st.session_state.get("original_text", "")
-variation_text_1 = st.session_state.get("variation_text_1", "")
-variation_text_2 = st.session_state.get("variation_text_2", "")
-
-# -----------------------------
-# Google NLP
-# -----------------------------
-def analyze_text_salience(text: str) -> dict:
-    client = language_v1.LanguageServiceClient()
-    document = language_v1.Document(content=text, type_=language_v1.Document.Type.PLAIN_TEXT)
-    response = client.analyze_entities(document=document)
-
-    entity_dict = {}
-    for entity in response.entities:
-        entity_dict[entity.name] = {
-            "Type": language_v1.Entity.Type(entity.type_).name,
-            "Salience": float(entity.salience),
-        }
-    return entity_dict
-
-# -----------------------------
-# Analyze + table
-# -----------------------------
-if "display_df" not in st.session_state:
-    st.session_state["display_df"] = None
-
-def _score_color(val: float) -> str:
-    if val >= 0.60: return "#16a34a"
-    if val >= 0.40: return "#ca8a04"
-    if val >= 0.20: return "#ea580c"
-    return "#dc2626"
-
-def _score_cell(val) -> str:
-    if val is None or (isinstance(val, float) and np.isnan(val)):
-        return '<td class="sc-num">—</td>'
-    color = _score_color(val)
-    return f'<td class="sc-num"><span style="color:{color}">●</span> {val:.2f}</td>'
-
-def build_score_table(df: pd.DataFrame) -> str:
-    score_cols = {"Original", "Variation 1", "Variation 2"}
-    headers = "".join(
-        f'<th class="sc-h sc-num">{c}</th>' if c in score_cols else f'<th class="sc-h">{c}</th>'
-        for c in df.columns
-    )
-    rows_html = ""
-    for i, (_, row) in enumerate(df.iterrows()):
-        bg = "rgba(255,255,255,0.03)" if i % 2 == 0 else "transparent"
-        cells = ""
-        for col in df.columns:
-            if col in score_cols:
-                cells += _score_cell(row[col])
-            else:
-                val = row[col] if row[col] is not None else "—"
-                cells += f'<td class="sc-td">{val}</td>'
-        rows_html += f'<tr style="background:{bg}">{cells}</tr>'
-    return f"""
-<style>
-  .sc-table {{width:100%;border-collapse:collapse;font-size:13px;font-family:'Montserrat',sans-serif;}}
-  .sc-h {{text-align:left;padding:8px 12px;border-bottom:1px solid rgba(255,255,255,0.12);
-          color:rgba(255,255,255,0.55);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;}}
-  .sc-h.sc-num {{text-align:right;}}
-  .sc-td {{padding:7px 12px;border-bottom:1px solid rgba(255,255,255,0.05);color:rgba(255,255,255,0.9);}}
-  .sc-num {{text-align:right;padding:7px 12px;border-bottom:1px solid rgba(255,255,255,0.05);
-            color:rgba(255,255,255,0.9);font-variant-numeric:tabular-nums;}}
-</style>
-<table class="sc-table"><thead><tr>{headers}</tr></thead><tbody>{rows_html}</tbody></table>
+SCORE_GUIDE = """
+<div style="background:rgba(226,26,107,0.08);border-left:4px solid #E21A6B;
+            padding:10px 14px;border-radius:4px;font-size:13px;margin:12px 0;">
+  <strong>Salience Score Guide</strong> &nbsp;—&nbsp;
+  <span style="color:#16a34a;font-weight:600">0.60+</span>&nbsp;Excellent: entity clearly dominates &nbsp;
+  <span style="color:#ca8a04;font-weight:600">0.40–0.59</span>&nbsp;Good: strong signal &nbsp;
+  <span style="color:#ea580c;font-weight:600">0.20–0.39</span>&nbsp;Moderate: competing entities dilute focus &nbsp;
+  <span style="color:#dc2626;font-weight:600">&lt; 0.20</span>&nbsp;Weak: entity is not the clear subject
+</div>
 """
 
-def assign_selected_entity():
-    df = st.session_state.get("display_df")
-    table_state = st.session_state.get("entity_table")
-    if df is None or table_state is None:
-        return
-    rows = table_state.selection.rows
-    if not rows:
-        return
-    selected_entity = df.iloc[rows[0]]["Entity"]
-    if st.session_state.get("assign_to") == "Variation 1":
-        st.session_state["target_entity_1"] = selected_entity
-    else:
-        st.session_state["target_entity_2"] = selected_entity
+# ══════════════════════════════════════════════════════════════════════════════
+# TOP-LEVEL TABS
+# ══════════════════════════════════════════════════════════════════════════════
 
-with col_analyze:
-    analyze_clicked = st.button("Analyze")
+tab_single, tab_bulk = st.tabs(["Single Analysis", "Bulk Analysis"])
 
-if analyze_clicked:
-    all_entities = {}
+# ══════════════════════════════════════════════════════════════════════════════
+# SINGLE ANALYSIS
+# ══════════════════════════════════════════════════════════════════════════════
 
-    if original_text:
-        all_entities["Original"] = analyze_text_salience(original_text)
-    if variation_text_1:
-        all_entities["Variation 1"] = analyze_text_salience(variation_text_1)
-    if variation_text_2:
-        all_entities["Variation 2"] = analyze_text_salience(variation_text_2)
+with tab_single:
 
-    rows_list = []
-    unique_entities = set(entity for text in all_entities.values() for entity in text)
+    # ── Input tabs ────────────────────────────────────────────────────────────
+    input_tab_paste, input_tab_url = st.tabs(["Paste text", "Load from URL"])
 
-    for entity in unique_entities:
-        row = {"Entity": entity, "Type": None, "Original": None, "Variation 1": None, "Variation 2": None}
-        salience_scores = []
+    with input_tab_url:
+        st.text_input("Page URL", key="page_url")
 
-        for text_version, entities in all_entities.items():
-            if entity in entities:
-                salience_score = float(entities[entity]["Salience"])
-                row["Type"] = entities[entity]["Type"]
-                row[text_version] = salience_score
-                salience_scores.append(salience_score)
+        if st.button("Load page elements", key="load_page_elements"):
+            if not st.session_state["page_url"].strip():
+                st.error("Paste a URL first.")
+            else:
+                with st.spinner("Fetching page and scoring elements…"):
+                    try:
+                        data = fetch_page_elements(st.session_state["page_url"].strip())
+                        st.session_state["url_meta_title"] = data.get("meta_title", "")
+                        st.session_state["url_meta_description"] = data.get("meta_description", "")
+                        st.session_state["url_h1"] = data.get("h1", "")
+                        st.session_state["url_first_sentence"] = data.get("first_sentence_after_h1", "")
+                        st.session_state["original_text"] = data.get("prefill_original", "")
 
-        row["Average Salience"] = float(np.mean(salience_scores)) if salience_scores else np.nan
-        rows_list.append(row)
+                        # Auto-score each element
+                        elem_map = {
+                            "url_meta_title": st.session_state["url_meta_title"],
+                            "url_meta_description": st.session_state["url_meta_description"],
+                            "url_h1": st.session_state["url_h1"],
+                            "url_first_sentence": st.session_state["url_first_sentence"],
+                        }
+                        scores = {}
+                        for key, text_val in elem_map.items():
+                            if text_val.strip():
+                                try:
+                                    ents = analyze_text_salience(text_val)
+                                    te, ts = top_entity(ents)
+                                    scores[key] = {"entity": te, "score": ts}
+                                except Exception:
+                                    scores[key] = {"entity": None, "score": None}
+                        st.session_state["url_element_scores"] = scores
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to fetch URL: {e}")
 
-    comparison_df = pd.DataFrame(rows_list)
+        # Display elements with inline scores + Use as original buttons
+        elem_display = [
+            ("Meta title", "url_meta_title", False),
+            ("Meta description", "url_meta_description", True),
+            ("H1", "url_h1", False),
+            ("First sentence after H1", "url_first_sentence", True),
+        ]
+        elem_scores = st.session_state.get("url_element_scores", {})
 
-    if not comparison_df.empty:
-        comparison_df = comparison_df.sort_values(by="Average Salience", ascending=False)
-        st.session_state["display_df"] = comparison_df.drop(columns=["Average Salience"])
-    else:
-        st.session_state["display_df"] = None
-        st.write("No entities found or no text provided.")
+        for label, key, multiline in elem_display:
+            text_val = st.session_state.get(key, "")
+            score_info = elem_scores.get(key, {})
+            col_field, col_score, col_btn = st.columns([5, 3, 2])
 
-# -----------------------------
-# Score guide + results table + export
-# -----------------------------
-if st.session_state.get("display_df") is not None:
+            with col_field:
+                if multiline:
+                    st.text_area(label, value=text_val, height=80, disabled=True, key=f"disp_{key}")
+                else:
+                    st.text_input(label, value=text_val, disabled=True, key=f"disp_{key}")
+
+            with col_score:
+                if score_info.get("entity"):
+                    te = score_info["entity"]
+                    ts = score_info["score"]
+                    color = score_color(ts)
+                    st.markdown(
+                        f'<div style="padding-top:{"26" if not multiline else "6"}px;font-size:12px;color:#9ca3af;">'
+                        f'Top entity:<br>'
+                        f'<span style="color:{color};font-weight:600">{te}</span> '
+                        f'<span style="color:{color};font-weight:600">({ts:.2f})</span></div>',
+                        unsafe_allow_html=True,
+                    )
+
+            with col_btn:
+                if text_val.strip():
+                    st.markdown(f'<div style="padding-top:{"24" if not multiline else "4"}px;">', unsafe_allow_html=True)
+                    st.button("Use as original", key=f"use_{key}",
+                              on_click=use_as_original, args=(key,))
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+    with input_tab_paste:
+        st.text_area(
+            "Paste the original content you want to analyze:",
+            height=100,
+            key="original_text",
+        )
+        orig_wc = wc(st.session_state.get("original_text", ""))
+        if orig_wc:
+            st.caption(f"{orig_wc} words")
+
+    # ── Variation containers ───────────────────────────────────────────────────
+    st.markdown("---")
+    orig_wc_for_delta = wc(st.session_state.get("original_text", ""))
+
+    with st.container(border=True):
+        st.markdown("#### Variation 1")
+        st.text_input("Target entity for Variation 1", key="target_entity_1", placeholder="e.g. Napa Valley")
+        st.selectbox(
+            "Element to optimize", options=_SOURCE_OPTIONS, key="variation_source_1",
+            help="URL elements are available after loading a URL above.",
+        )
+        st.text_area(
+            "Variation 1 text (paste manually or click Generate below):",
+            height=100, key="variation_text_1",
+        )
+        v1_wc = wc(st.session_state.get("variation_text_1", ""))
+        if v1_wc:
+            delta = v1_wc - orig_wc_for_delta if orig_wc_for_delta else 0
+            delta_str = f" ({'+' if delta >= 0 else ''}{delta} vs original)" if orig_wc_for_delta else ""
+            st.caption(f"{v1_wc} words{delta_str}")
+        copy_button(st.session_state.get("variation_text_1", ""), key="v1")
+
+    with st.container(border=True):
+        st.markdown("#### Variation 2")
+        st.text_input("Target entity for Variation 2", key="target_entity_2", placeholder="e.g. Sonoma County")
+        st.selectbox(
+            "Element to optimize", options=_SOURCE_OPTIONS, key="variation_source_2",
+            help="URL elements are available after loading a URL above.",
+        )
+        st.text_area(
+            "Variation 2 text (paste manually or click Generate below):",
+            height=100, key="variation_text_2",
+        )
+        v2_wc = wc(st.session_state.get("variation_text_2", ""))
+        if v2_wc:
+            delta = v2_wc - orig_wc_for_delta if orig_wc_for_delta else 0
+            delta_str = f" ({'+' if delta >= 0 else ''}{delta} vs original)" if orig_wc_for_delta else ""
+            st.caption(f"{v2_wc} words{delta_str}")
+        copy_button(st.session_state.get("variation_text_2", ""), key="v2")
+
+    st.markdown("---")
+
+    # ── Target keyword ─────────────────────────────────────────────────────────
+    st.text_input(
+        "Target SEO keyword (optional — suggests which entity to optimize for)",
+        key="target_keyword", placeholder="e.g. luxury spa Georgia",
+    )
+    if st.session_state.get("keyword_suggestion"):
+        st.info(
+            f"💡 Suggested entity for **\"{st.session_state['target_keyword']}\"**: "
+            f"**{st.session_state['keyword_suggestion']}**"
+        )
+
+    # ── Controls row ───────────────────────────────────────────────────────────
+    ctrl_left, ctrl_right = st.columns([5, 1])
+    with ctrl_left:
+        st.radio("Generate with Claude for:", ["Variation 1", "Variation 2"],
+                 horizontal=True, key="assign_to")
+    with ctrl_right:
+        st.markdown('<div style="padding-top:28px;">', unsafe_allow_html=True)
+        st.button("Clear all", on_click=clear_all)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    col_gen, col_analyze, col_suggest = st.columns([2, 2, 2])
+
+    with col_gen:
+        st.button(
+            "Generate with Claude",
+            on_click=on_generate_with_claude,
+            disabled=not bool(ANTHROPIC_API_KEY),
+        )
+
+    if st.session_state.get("claude_error"):
+        st.error(st.session_state["claude_error"])
+    if not ANTHROPIC_API_KEY:
+        st.warning("ANTHROPIC_API_KEY is not set. Add it to .env and restart.")
+
+    # ── Analyze ────────────────────────────────────────────────────────────────
+    original_text = st.session_state.get("original_text", "")
+    variation_text_1 = st.session_state.get("variation_text_1", "")
+    variation_text_2 = st.session_state.get("variation_text_2", "")
+
+    with col_analyze:
+        analyze_clicked = st.button("Analyze")
+
+    with col_suggest:
+        suggest_clicked = st.button(
+            "Suggest entity",
+            disabled=not bool(ANTHROPIC_API_KEY) or not st.session_state.get("target_keyword", "").strip(),
+            help="Requires a target keyword and at least one Analyze run.",
+        )
+
+    if suggest_clicked:
+        df = st.session_state.get("display_df")
+        kw = st.session_state.get("target_keyword", "").strip()
+        if df is None:
+            st.warning("Run Analyze first.")
+        elif not kw:
+            st.warning("Enter a target keyword first.")
+        else:
+            with st.spinner("Asking Claude…"):
+                try:
+                    suggestion = suggest_entity_for_keyword(df["Entity"].tolist(), kw)
+                    st.session_state["keyword_suggestion"] = suggestion
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Suggestion failed: {e}")
+
+    if analyze_clicked:
+        if not any([original_text.strip(), variation_text_1.strip(), variation_text_2.strip()]):
+            st.error("Add some text to analyze first — paste text or load a URL.")
+        else:
+            with st.spinner("Scoring with Google NLP…"):
+                all_entities = {}
+                if original_text.strip():
+                    all_entities["Original"] = analyze_text_salience(original_text)
+                if variation_text_1.strip():
+                    all_entities["Variation 1"] = analyze_text_salience(variation_text_1)
+                if variation_text_2.strip():
+                    all_entities["Variation 2"] = analyze_text_salience(variation_text_2)
+
+            rows_list = []
+            unique_entities = set(e for ents in all_entities.values() for e in ents)
+            for entity in unique_entities:
+                row = {"Entity": entity, "Type": None,
+                       "Original": None, "Variation 1": None, "Variation 2": None}
+                salience_scores = []
+                for version, ents in all_entities.items():
+                    if entity in ents:
+                        s = float(ents[entity]["Salience"])
+                        row["Type"] = ents[entity]["Type"]
+                        row[version] = s
+                        salience_scores.append(s)
+                row["Average Salience"] = float(np.mean(salience_scores)) if salience_scores else np.nan
+                rows_list.append(row)
+
+            comparison_df = pd.DataFrame(rows_list)
+
+            if comparison_df.empty:
+                st.session_state["display_df"] = None
+                st.warning(
+                    "No entities were found. This usually means the text is too short or too generic. "
+                    "Try pasting a longer passage with named people, places, or organizations."
+                )
+            else:
+                comparison_df = comparison_df.sort_values(by="Average Salience", ascending=False)
+                new_df = comparison_df.drop(columns=["Average Salience"])
+                st.session_state["display_df"] = new_df
+
+                # Save to session history (newest first, max 10)
+                st.session_state["session_history"] = ([{
+                    "time": datetime.now().strftime("%H:%M:%S"),
+                    "url": st.session_state.get("page_url", "") or "pasted text",
+                    "entity_1": st.session_state.get("target_entity_1", ""),
+                    "entity_2": st.session_state.get("target_entity_2", ""),
+                    "df": new_df.copy(),
+                }] + st.session_state.get("session_history", []))[:10]
+
+    # ── Results ────────────────────────────────────────────────────────────────
+    if st.session_state.get("display_df") is not None:
+        display_df = st.session_state["display_df"]
+
+        # Winner highlight
+        winner_lines = []
+        for col_name, entity_key in [("Variation 1", "target_entity_1"), ("Variation 2", "target_entity_2")]:
+            entity = st.session_state.get(entity_key, "").strip()
+            if not entity:
+                continue
+            match = display_df[display_df["Entity"].str.lower() == entity.lower()]
+            if match.empty:
+                continue
+            row = match.iloc[0]
+            score_cols_present = [c for c in ["Original", "Variation 1", "Variation 2"]
+                                   if c in row.index and pd.notna(row[c])]
+            if not score_cols_present:
+                continue
+            best_col = max(score_cols_present, key=lambda c: row[c])
+            best_score = row[best_col]
+            orig_score = row.get("Original") if "Original" in row.index and pd.notna(row.get("Original")) else None
+            improvement = (
+                f" — up from <strong>{orig_score:.2f}</strong> original"
+                if orig_score and best_col != "Original" else ""
+            )
+            color = score_color(best_score)
+            winner_lines.append(
+                f'<span style="color:{color};font-weight:600">▲ {entity}</span>: '
+                f'best in <strong>{best_col}</strong> at '
+                f'<span style="color:{color};font-weight:600">{best_score:.2f}</span>{improvement}'
+            )
+
+        if winner_lines:
+            st.markdown(
+                '<div style="background:rgba(255,255,255,0.04);border-radius:6px;'
+                'padding:10px 14px;font-size:13px;margin-bottom:4px;">'
+                + " &nbsp;|&nbsp; ".join(winner_lines) + "</div>",
+                unsafe_allow_html=True,
+            )
+
+        st.markdown(SCORE_GUIDE, unsafe_allow_html=True)
+
+        score_cols = [c for c in ["Original", "Variation 1", "Variation 2"] if c in display_df.columns]
+        styled = display_df.style.map(style_score, subset=score_cols)
+
+        st.dataframe(
+            styled,
+            use_container_width=True,
+            hide_index=True,
+            on_select=assign_selected_entity,
+            selection_mode="single-row",
+            key="entity_table",
+            column_config={
+                "Original": st.column_config.NumberColumn(format="%.2f"),
+                "Variation 1": st.column_config.NumberColumn(format="%.2f"),
+                "Variation 2": st.column_config.NumberColumn(format="%.2f"),
+            },
+        )
+
+        export_df = display_df.copy()
+        page_url = st.session_state.get("page_url", "")
+        export_df.insert(0, "URL", page_url if page_url.strip() else "—")
+        st.download_button(
+            "Export to CSV",
+            data=export_df.to_csv(index=False).encode("utf-8"),
+            file_name="salience_analysis.csv",
+            mime="text/csv",
+        )
+
+    # ── Session history ────────────────────────────────────────────────────────
+    history = st.session_state.get("session_history", [])
+    if len(history) > 1:
+        with st.expander(f"Session history ({len(history)} analyses)"):
+            for i, entry in enumerate(history):
+                url_label = entry["url"] if entry["url"] != "pasted text" else "Pasted text"
+                entities_label = " / ".join(
+                    filter(None, [entry.get("entity_1"), entry.get("entity_2")])
+                ) or "—"
+                st.markdown(f"**{entry['time']}** — {url_label} — _{entities_label}_")
+                h_df = entry["df"]
+                h_score_cols = [c for c in ["Original", "Variation 1", "Variation 2"] if c in h_df.columns]
+                h_styled = h_df.style.map(style_score, subset=h_score_cols)
+                st.dataframe(
+                    h_styled,
+                    use_container_width=True,
+                    hide_index=True,
+                    key=f"hist_{i}",
+                    column_config={
+                        "Original": st.column_config.NumberColumn(format="%.2f"),
+                        "Variation 1": st.column_config.NumberColumn(format="%.2f"),
+                        "Variation 2": st.column_config.NumberColumn(format="%.2f"),
+                    },
+                )
+                if i < len(history) - 1:
+                    st.divider()
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BULK ANALYSIS
+# ══════════════════════════════════════════════════════════════════════════════
+
+with tab_bulk:
+    st.markdown("### Bulk URL Analysis")
     st.markdown(
-        """
-        <div style="background:rgba(226,26,107,0.08); border-left:4px solid #E21A6B;
-                    padding:10px 14px; border-radius:4px; font-size:13px; margin:12px 0;">
-          <strong>Salience Score Guide</strong> &nbsp;—&nbsp;
-          <span style="color:#16a34a; font-weight:600">0.60+</span>&nbsp;Excellent: entity clearly dominates &nbsp;
-          <span style="color:#ca8a04; font-weight:600">0.40–0.59</span>&nbsp;Good: strong signal &nbsp;
-          <span style="color:#ea580c; font-weight:600">0.20–0.39</span>&nbsp;Moderate: competing entities dilute focus &nbsp;
-          <span style="color:#dc2626; font-weight:600">&lt; 0.20</span>&nbsp;Weak: entity is not the clear subject
-        </div>
-        """,
-        unsafe_allow_html=True,
+        "Paste a list of URLs (one per line). The tool fetches each page, scores the H1 and first "
+        "sentence, and returns the top entity and salience score for each. Optionally enter a target "
+        "entity to see its specific score across all pages."
     )
 
-    display_df = st.session_state["display_df"]
+    st.text_area("URLs (one per line):", height=180, key="bulk_urls_input",
+                 placeholder="https://example.com/page-1\nhttps://example.com/page-2")
+    st.text_input("Target entity (optional — scored across all URLs):",
+                  key="bulk_target_entity", placeholder="e.g. Napa Valley")
 
-    def style_score(val):
-        if val is None or (isinstance(val, float) and np.isnan(val)):
-            return ""
-        if val >= 0.60: return "color: #16a34a; font-weight: 600"
-        if val >= 0.40: return "color: #ca8a04; font-weight: 600"
-        if val >= 0.20: return "color: #ea580c; font-weight: 600"
-        return "color: #dc2626; font-weight: 600"
+    if st.button("Run Bulk Analysis", key="run_bulk"):
+        urls = [u.strip() for u in st.session_state["bulk_urls_input"].splitlines() if u.strip()]
+        if not urls:
+            st.error("Paste at least one URL.")
+        else:
+            results = []
+            progress_bar = st.progress(0, text="Starting…")
 
-    score_cols = [c for c in ["Original", "Variation 1", "Variation 2"] if c in display_df.columns]
-    styled = display_df.style.map(style_score, subset=score_cols)
+            for i, url in enumerate(urls):
+                progress_bar.progress(i / len(urls), text=f"Processing {i + 1}/{len(urls)}: {url[:70]}…")
+                try:
+                    data = fetch_page_elements(url)
+                    h1 = data.get("h1", "")
+                    fs = data.get("first_sentence_after_h1", "")
+                    target = st.session_state.get("bulk_target_entity", "").strip()
 
-    st.dataframe(
-        styled,
-        use_container_width=True,
-        hide_index=True,
-        on_select=assign_selected_entity,
-        selection_mode="single-row",
-        key="entity_table",
-        column_config={
-            "Original": st.column_config.NumberColumn(format="%.2f"),
-            "Variation 1": st.column_config.NumberColumn(format="%.2f"),
-            "Variation 2": st.column_config.NumberColumn(format="%.2f"),
-        },
-    )
+                    h1_entity, h1_score = (None, None)
+                    if h1.strip():
+                        h1_ents = analyze_text_salience(h1)
+                        h1_entity, h1_score = top_entity(h1_ents)
+                        target_h1_score = h1_ents.get(target, {}).get("Salience") if target else None
+                    else:
+                        h1_ents = {}
+                        target_h1_score = None
 
-    export_df = display_df.copy()
-    page_url = st.session_state.get("page_url", "")
-    export_df.insert(0, "URL", page_url if page_url.strip() else "—")
+                    fs_entity, fs_score = (None, None)
+                    if fs.strip():
+                        fs_ents = analyze_text_salience(fs)
+                        fs_entity, fs_score = top_entity(fs_ents)
+                        target_fs_score = fs_ents.get(target, {}).get("Salience") if target else None
+                    else:
+                        target_fs_score = None
 
-    csv_bytes = export_df.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        label="Export to CSV",
-        data=csv_bytes,
-        file_name="salience_analysis.csv",
-        mime="text/csv",
-    )
+                    row = {
+                        "URL": url,
+                        "H1": h1,
+                        "H1 Top Entity": h1_entity or "—",
+                        "H1 Top Score": round(h1_score, 2) if h1_score is not None else None,
+                        "First Sentence Top Entity": fs_entity or "—",
+                        "First Sentence Top Score": round(fs_score, 2) if fs_score is not None else None,
+                        "Error": "",
+                    }
+                    if target:
+                        row["H1 Target Score"] = round(target_h1_score, 2) if target_h1_score is not None else None
+                        row["FS Target Score"] = round(target_fs_score, 2) if target_fs_score is not None else None
+
+                    results.append(row)
+
+                except Exception as e:
+                    results.append({
+                        "URL": url, "H1": "", "H1 Top Entity": "—", "H1 Top Score": None,
+                        "First Sentence Top Entity": "—", "First Sentence Top Score": None,
+                        "Error": str(e),
+                    })
+
+            progress_bar.progress(1.0, text=f"Done! Processed {len(urls)} URLs.")
+            st.session_state["bulk_results_df"] = pd.DataFrame(results)
+
+    if st.session_state.get("bulk_results_df") is not None:
+        bulk_df = st.session_state["bulk_results_df"]
+        bulk_score_cols = [c for c in bulk_df.columns if "Score" in c]
+        bulk_styled = bulk_df.style.map(style_score, subset=bulk_score_cols)
+
+        st.dataframe(
+            bulk_styled,
+            use_container_width=True,
+            hide_index=True,
+            column_config={c: st.column_config.NumberColumn(format="%.2f") for c in bulk_score_cols},
+        )
+
+        st.download_button(
+            "Export Bulk Results to CSV",
+            data=bulk_df.to_csv(index=False).encode("utf-8"),
+            file_name="bulk_salience.csv",
+            mime="text/csv",
+        )
