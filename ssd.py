@@ -199,9 +199,13 @@ def suggest_entity_for_keyword(entities: list, keyword: str) -> str:
     client = get_claude_client(ANTHROPIC_API_KEY)
     entity_list = ", ".join(f'"{e}"' for e in entities[:20])
     prompt = (
-        f'From this list of entities: {entity_list}\n\n'
-        f'Which single entity best represents or is most closely associated with the SEO keyword "{keyword}"?\n'
-        f'Reply with ONLY the entity name, exactly as written. No explanation.'
+        f'You are an SEO specialist. A page contains these named entities: {entity_list}\n\n'
+        f'A user wants to optimize this page to rank for the keyword: "{keyword}"\n\n'
+        f'Which SINGLE entity from the list should be made the most salient (dominant subject) '
+        f'to best align this page with that keyword from an SEO perspective? '
+        f'Choose the entity that most directly represents the searcher\'s intent behind "{keyword}" '
+        f'— not necessarily the brand or the most prominent entity currently on the page.\n\n'
+        f'Reply with ONLY the entity name, exactly as written in the list above. No explanation.'
     )
     message = client.messages.create(
         model=CLAUDE_MODEL,
@@ -263,6 +267,7 @@ defaults: dict = {
     "claude_error": "",
     "analyze_v1_label": "",
     "analyze_v2_label": "",
+    "selected_original_key": "",
     # Keyword suggestion
     "target_keyword": "",
     "keyword_suggestion": "",
@@ -303,6 +308,7 @@ def clear_all():
 
 def use_as_original(key: str):
     st.session_state["original_text"] = st.session_state.get(key, "")
+    st.session_state["selected_original_key"] = key
 
 
 def assign_selected_entity():
@@ -456,9 +462,18 @@ with tab_single:
 
             with col_btn:
                 if text_val.strip():
+                    is_selected = st.session_state.get("selected_original_key") == key
                     st.markdown(f'<div style="padding-top:{"24" if not multiline else "4"}px;">', unsafe_allow_html=True)
-                    st.button("Use as original", key=f"use_{key}",
+                    st.button("Analyze this element", key=f"use_{key}",
                               on_click=use_as_original, args=(key,))
+                    if is_selected:
+                        st.markdown(
+                            '<div style="font-size:11px;color:#16a34a;font-weight:700;'
+                            'background:rgba(22,163,74,0.12);border:1px solid #16a34a;'
+                            'border-radius:4px;padding:2px 7px;margin-top:4px;text-align:center;">'
+                            '✓ Active original</div>',
+                            unsafe_allow_html=True,
+                        )
                     st.markdown('</div>', unsafe_allow_html=True)
 
     with input_tab_paste:
@@ -580,28 +595,23 @@ with tab_single:
                     st.error(f"Suggestion failed: {e}")
 
     if analyze_clicked:
-        # If a variation text box is empty, fall back to the selected source element
         v1_source_label = st.session_state.get("variation_source_1", "Pasted text")
         v2_source_label = st.session_state.get("variation_source_2", "Pasted text")
-        v1_source_key = _SOURCE_KEY_MAP[v1_source_label]
-        v2_source_key = _SOURCE_KEY_MAP[v2_source_label]
-        analyze_v1 = variation_text_1.strip() or st.session_state.get(v1_source_key, "").strip()
-        analyze_v2 = variation_text_2.strip() or st.session_state.get(v2_source_key, "").strip()
 
-        if not any([original_text.strip(), analyze_v1, analyze_v2]):
-            st.error("Add some text to analyze first — paste text or load a URL.")
+        if not any([original_text.strip(), variation_text_1.strip(), variation_text_2.strip()]):
+            st.error("Add some text to analyze first — paste text in a variation box or click 'Analyze this element' to set an original.")
         else:
             with st.spinner("Scoring with Google NLP…"):
                 all_entities = {}
                 if original_text.strip():
                     all_entities["Original"] = analyze_text_salience(original_text)
-                if analyze_v1:
-                    all_entities["Variation 1"] = analyze_text_salience(analyze_v1)
+                if variation_text_1.strip():
+                    all_entities["Variation 1"] = analyze_text_salience(variation_text_1)
                     st.session_state["analyze_v1_label"] = v1_source_label
                 else:
                     st.session_state["analyze_v1_label"] = ""
-                if analyze_v2:
-                    all_entities["Variation 2"] = analyze_text_salience(analyze_v2)
+                if variation_text_2.strip():
+                    all_entities["Variation 2"] = analyze_text_salience(variation_text_2)
                     st.session_state["analyze_v2_label"] = v2_source_label
                 else:
                     st.session_state["analyze_v2_label"] = ""
