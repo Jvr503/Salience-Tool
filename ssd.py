@@ -674,7 +674,7 @@ with tab_single:
 
         st.dataframe(
             styled,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             on_select=assign_selected_entity,
             selection_mode="single-row",
@@ -711,7 +711,7 @@ with tab_single:
                 h_styled = h_df.style.map(style_score, subset=h_score_cols)
                 st.dataframe(
                     h_styled,
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                     key=f"hist_{i}",
                     column_config={
@@ -805,7 +805,7 @@ with tab_bulk:
 
         st.dataframe(
             bulk_styled,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config={c: st.column_config.NumberColumn(format="%.2f") for c in bulk_score_cols},
         )
