@@ -375,6 +375,217 @@ def on_generate_with_claude():
     st.toast("Text generated successfully.")
 
 
+def generate_onpage_recommendation(element_type: str, original: str, primary_kw: str, secondary_kws: str = "") -> str:
+    """Generate an optimized rewrite for an on-page element, or return 'leave as is'."""
+    if not original.strip():
+        return ""
+    client = get_claude_client(ANTHROPIC_API_KEY)
+    sec_ctx = (f"\nSecondary keywords to incorporate naturally: {secondary_kws}"
+               if secondary_kws.strip() else "")
+    if element_type in _SHORT_ELEMENTS:
+        word_cnt = len(original.split())
+        prompt = (
+            f'You are an SEO specialist writing on-page recommendations.\n\n'
+            f'Element: {element_type}\n'
+            f'Primary keyword (target entity): "{primary_kw}"{sec_ctx}\n\n'
+            f'Current {element_type}: {original}\n\n'
+            f'Rewrite so "{primary_kw}" is the dominant entity.\n\n'
+            f'Rules:\n'
+            f'1. Keep it a short heading — {word_cnt} words (±2). Never expand to a sentence.\n'
+            f'2. Place "{primary_kw}" first or second in the heading.\n'
+            f'3. If it already starts with or prominently features "{primary_kw}", reply exactly: leave as is\n'
+            f'4. Return ONLY the rewritten heading or "leave as is". No explanation.'
+        )
+    else:
+        char_target = len(original)
+        prompt = (
+            f'You are an SEO specialist writing on-page recommendations.\n\n'
+            f'Element: {element_type}\n'
+            f'Primary keyword (target entity): "{primary_kw}"{sec_ctx}\n\n'
+            f'Current {element_type}: {original}\n\n'
+            f'Rewrite so "{primary_kw}" is the dominant entity for Google NLP salience.\n\n'
+            f'Rules:\n'
+            f'1. Put "{primary_kw}" in the first 8–10 words.\n'
+            f'2. Make "{primary_kw}" the grammatical subject.\n'
+            f'3. Keep roughly the same length (target ≈{char_target} chars ± 15).\n'
+            f'4. Incorporate secondary keywords naturally if provided.\n'
+            f'5. If "{primary_kw}" is already clearly dominant in the first sentence, reply exactly: leave as is\n'
+            f'6. Return ONLY the rewritten text or "leave as is". No explanation.'
+        )
+    msg = client.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=300,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    result = msg.content[0].text.strip()
+    return "leave as is" if result.lower().startswith("leave as is") else result
+
+
+def generate_seo_notes(primary_kw: str, title: str, rec_title: str,
+                       desc: str, rec_desc: str, h1: str, rec_h1: str,
+                       first_sent: str, rec_first: str) -> str:
+    """Generate a brief SEO rationale note for the changes made."""
+    client = get_claude_client(ANTHROPIC_API_KEY)
+
+    def _changed(orig, rec):
+        return rec.strip().lower() != "leave as is" and rec.strip() != orig.strip()
+
+    changed = [name for name, o, r in [
+        ("title", title, rec_title), ("meta description", desc, rec_desc),
+        ("H1", h1, rec_h1), ("first sentence", first_sent, rec_first),
+    ] if _changed(o, r)]
+
+    prompt = (
+        f'You are an SEO specialist writing brief notes for an on-page recommendation report.\n\n'
+        f'Primary keyword: "{primary_kw}"\n'
+        f'Elements changed: {", ".join(changed) if changed else "none (all already well-optimised)"}\n\n'
+        f'Existing:\n'
+        f'- Page Title: {title[:80]}\n'
+        f'- H1: {h1[:60]}\n\n'
+        f'Write 1–2 concise sentences: what was changed and the SEO rationale, '
+        f'or why elements were left as-is.\n'
+        f'Example style: "Align H1 to primary keyword; meta already strong."\n'
+        f'Return ONLY the note text.'
+    )
+    msg = client.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=120,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return msg.content[0].text.strip()
+
+
+def build_onpage_excel(results: list, client_name: str = "") -> bytes:
+    """Build an on-page recommendations Excel file matching the Propellic reference format."""
+    import io as _io
+    from openpyxl import Workbook
+    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "On-Page Recommendations"
+
+    # ── Fills ──
+    NAVY         = PatternFill("solid", fgColor="073763")
+    COL_ORANGE   = PatternFill("solid", fgColor="E69138")
+    PINK         = PatternFill("solid", fgColor="E6235E")
+    GREEN        = PatternFill("solid", fgColor="5CBD8D")
+    YELLOW       = PatternFill("solid", fgColor="F1C232")
+    NOTE_ORANGE  = PatternFill("solid", fgColor="FF9900")
+
+    WHITE_BOLD = Font(bold=True, color="FFFFFF")
+    BLUE_LINK  = Font(color="0000FF", underline="single")
+    CENTER     = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    LEFT_TOP   = Alignment(horizontal="left",   vertical="top",    wrap_text=True)
+    thin       = Side(style="thin", color="CCCCCC")
+    BORDER     = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    # ── Row 1: client name ──
+    if client_name.strip():
+        cell = ws["A1"]
+        cell.value = client_name
+        cell.font = Font(bold=True, size=13)
+        cell.alignment = CENTER
+
+    # ── Column spec: (header, fill, width) ──
+    COLS = [
+        ("Approved?",                    NAVY,        13),
+        ("Done?",                        NAVY,        11),
+        ("Existing URL",                 NAVY,        55),
+        ("Primary Keyword",              COL_ORANGE,  30),
+        ("KD",                           PINK,         7),
+        ("Volume",                       PINK,        12),
+        ("Recommended URL",              GREEN,       35),
+        ("Secondary Keywords",           PINK,        32),
+        ("Page Title",                   PINK,        50),
+        ("Length",                       YELLOW,       9),
+        ("Recommended Title",            GREEN,       50),
+        ("Meta Description",             PINK,        50),
+        ("Length",                       YELLOW,       9),
+        ("Recommended Meta Description", GREEN,       55),
+        ("Length",                       YELLOW,       9),
+        ("H1",                           PINK,        35),
+        ("Recommended H1",               GREEN,       35),
+        ("First Sentence after H1",      PINK,        55),
+        ("Length",                       YELLOW,       9),
+        ("Recommended First Sentence",   GREEN,       55),
+        ("Length",                       YELLOW,       9),
+        ("Notes",                        NOTE_ORANGE, 45),
+    ]
+
+    # ── Row 2: headers ──
+    for ci, (header, fill, width) in enumerate(COLS, 1):
+        cell = ws.cell(row=2, column=ci, value=header)
+        cell.fill = fill
+        cell.font = WHITE_BOLD
+        cell.alignment = CENTER
+        cell.border = BORDER
+        ws.column_dimensions[get_column_letter(ci)].width = width
+    ws.row_dimensions[2].height = 30
+
+    # ── Data rows ──
+    for ri, row in enumerate(results, 3):
+        def w(ci, val):
+            c2 = ws.cell(row=ri, column=ci, value=val)
+            c2.alignment = LEFT_TOP
+            c2.border = BORDER
+            return c2
+
+        # A,B: leave blank (client fills)
+        w(1, ""); w(2, "")
+
+        url_cell = w(3, row.get("Existing URL", ""))
+        url_cell.font = BLUE_LINK
+
+        w(4, row.get("Primary Keyword", ""))
+
+        kd = row.get("KD")
+        try:    w(5, int(float(kd)) if kd not in (None, "", float("nan")) else "")
+        except: w(5, "")
+
+        vol = row.get("Volume")
+        try:    w(6, int(float(vol)) if vol not in (None, "", float("nan")) else "")
+        except: w(6, "")
+
+        w(7,  row.get("Recommended URL", "") or "Leave as is")
+        w(8,  row.get("Secondary Keywords", ""))
+
+        title = row.get("Page Title", "")
+        w(9,  title)
+        w(10, len(title) if title else "")
+        w(11, row.get("Recommended Title", ""))
+
+        desc = row.get("Meta Description", "")
+        w(12, desc)
+        w(13, len(desc) if desc else "")
+
+        rec_desc = row.get("Recommended Meta Description", "")
+        w(14, rec_desc)
+        w(15, len(rec_desc) if rec_desc else "")
+
+        w(16, row.get("H1", ""))
+        w(17, row.get("Recommended H1", ""))
+
+        fs = row.get("First Sentence after H1", "")
+        w(18, fs)
+        w(19, len(fs) if fs else "")
+
+        rec_fs = row.get("Recommended First Sentence", "")
+        w(20, rec_fs)
+        w(21, len(rec_fs) if rec_fs else "")
+
+        w(22, row.get("Notes", ""))
+
+        ws.row_dimensions[ri].height = 60
+
+    ws.freeze_panes = "A3"
+
+    buf = _io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 # ── Score guide markdown ───────────────────────────────────────────────────────
 
 SCORE_GUIDE = """
@@ -392,7 +603,7 @@ SCORE_GUIDE = """
 # TOP-LEVEL TABS
 # ══════════════════════════════════════════════════════════════════════════════
 
-tab_single, tab_bulk = st.tabs(["Single Analysis", "Bulk Analysis"])
+tab_single, tab_bulk, tab_recs = st.tabs(["Single Analysis", "Bulk Analysis", "On-Page Recommendations"])
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SINGLE ANALYSIS
@@ -889,4 +1100,191 @@ with tab_bulk:
             data=bulk_display.to_csv(index=False).encode("utf-8"),
             file_name="bulk_salience.csv",
             mime="text/csv",
+        )
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ON-PAGE RECOMMENDATIONS
+# ══════════════════════════════════════════════════════════════════════════════
+
+with tab_recs:
+    st.markdown("### On-Page Recommendations")
+    st.markdown(
+        "Enter your target pages and keywords. The tool fetches each page's current "
+        "elements, generates salience-optimized recommendations with Claude, and exports "
+        "a formatted spreadsheet matching the Propellic deliverable template."
+    )
+
+    # Initialize session state for this tab
+    _recs_default_rows = [
+        {"Existing URL": "", "Primary Keyword": "", "KD": None,
+         "Volume": None, "Recommended URL": "", "Secondary Keywords": ""}
+    ] * 5
+    if "recs_input_df" not in st.session_state:
+        st.session_state["recs_input_df"] = pd.DataFrame(_recs_default_rows)
+    if "recs_results" not in st.session_state:
+        st.session_state["recs_results"] = []
+    if "recs_client_name" not in st.session_state:
+        st.session_state["recs_client_name"] = ""
+
+    st.text_input(
+        "Client / project name (shown in export header):",
+        key="recs_client_name",
+        placeholder="e.g. The Kartrite",
+    )
+
+    st.markdown("#### Step 1 — Enter pages and keywords")
+    st.caption(
+        "Existing URL and Primary Keyword are required per row. "
+        "KD, Volume, Recommended URL, and Secondary Keywords are optional."
+    )
+
+    edited_input = st.data_editor(
+        st.session_state["recs_input_df"],
+        key="recs_data_editor",
+        num_rows="dynamic",
+        column_config={
+            "Existing URL":      st.column_config.TextColumn("Existing URL",      width="large"),
+            "Primary Keyword":   st.column_config.TextColumn("Primary Keyword",   width="medium"),
+            "KD":                st.column_config.NumberColumn("KD",              min_value=0, max_value=100, step=1),
+            "Volume":            st.column_config.NumberColumn("Volume",          min_value=0, step=1),
+            "Recommended URL":   st.column_config.TextColumn("Recommended URL",   width="medium"),
+            "Secondary Keywords":st.column_config.TextColumn("Secondary Keywords",width="medium"),
+        },
+        use_container_width=True,
+        hide_index=True,
+    )
+    st.session_state["recs_input_df"] = edited_input
+
+    st.markdown("#### Step 2 — Generate recommendations")
+
+    if st.button("Run On-Page Recommendations", key="run_recs"):
+        if not ANTHROPIC_API_KEY:
+            st.error("ANTHROPIC_API_KEY is required. Add it to .env and restart.")
+        else:
+            # Filter to rows that have both URL and keyword
+            try:
+                run_df = edited_input[
+                    edited_input["Existing URL"].astype(str).str.strip().astype(bool) &
+                    edited_input["Primary Keyword"].astype(str).str.strip().astype(bool)
+                ]
+            except Exception:
+                run_df = pd.DataFrame()
+
+            if run_df.empty:
+                st.error("Fill in at least one row with an Existing URL and Primary Keyword.")
+            else:
+                results = []
+                n = len(run_df)
+                progress_bar = st.progress(0, text="Starting…")
+
+                for i, (_, row) in enumerate(run_df.iterrows()):
+                    url         = str(row["Existing URL"]).strip()
+                    primary_kw  = str(row["Primary Keyword"]).strip()
+                    secondary   = str(row.get("Secondary Keywords") or "").strip()
+                    rec_url     = str(row.get("Recommended URL") or "").strip()
+                    kd_val      = row.get("KD")
+                    vol_val     = row.get("Volume")
+
+                    progress_bar.progress(
+                        i / n,
+                        text=f"Processing {i + 1}/{n}: {url[:60]}…"
+                    )
+
+                    result = {
+                        "Existing URL":      url,
+                        "Primary Keyword":   primary_kw,
+                        "KD":                kd_val,
+                        "Volume":            vol_val,
+                        "Recommended URL":   rec_url,
+                        "Secondary Keywords":secondary,
+                    }
+
+                    try:
+                        page_data  = fetch_page_elements(url)
+                        title      = page_data.get("meta_title", "")
+                        desc       = page_data.get("meta_description", "")
+                        h1         = page_data.get("h1", "")
+                        first_sent = page_data.get("first_sentence_after_h1", "")
+
+                        result["Page Title"]               = title
+                        result["Meta Description"]          = desc
+                        result["H1"]                        = h1
+                        result["First Sentence after H1"]   = first_sent
+
+                        rec_title  = generate_onpage_recommendation("Meta title",                title,      primary_kw, secondary)
+                        rec_desc   = generate_onpage_recommendation("Meta description",           desc,       primary_kw, secondary)
+                        rec_h1     = generate_onpage_recommendation("H1",                         h1,         primary_kw, secondary)
+                        rec_first  = generate_onpage_recommendation("First sentence after H1",    first_sent, primary_kw, secondary)
+                        notes      = generate_seo_notes(primary_kw, title, rec_title, desc, rec_desc, h1, rec_h1, first_sent, rec_first)
+
+                        result["Recommended Title"]              = rec_title
+                        result["Recommended Meta Description"]    = rec_desc
+                        result["Recommended H1"]                  = rec_h1
+                        result["Recommended First Sentence"]      = rec_first
+                        result["Notes"]                           = notes
+                        result["Error"]                           = ""
+
+                    except Exception as exc:
+                        for k in ["Page Title", "Meta Description", "H1", "First Sentence after H1",
+                                  "Recommended Title", "Recommended Meta Description",
+                                  "Recommended H1", "Recommended First Sentence", "Notes"]:
+                            result[k] = ""
+                        result["Error"] = str(exc)
+
+                    results.append(result)
+
+                progress_bar.progress(1.0, text=f"Done! Processed {n} pages.")
+                st.session_state["recs_results"] = results
+
+    # ── Results ────────────────────────────────────────────────────────────────
+    if st.session_state.get("recs_results"):
+        results = st.session_state["recs_results"]
+
+        st.markdown("#### Step 3 — Review results")
+
+        # Build display DataFrame (condensed view)
+        disp_cols = [
+            "Existing URL", "Primary Keyword",
+            "Page Title", "Recommended Title",
+            "H1", "Recommended H1",
+            "First Sentence after H1", "Recommended First Sentence",
+            "Notes",
+        ]
+        disp_data = [{k: r.get(k, "") for k in disp_cols} for r in results]
+        disp_df = pd.DataFrame(disp_data)
+
+        st.dataframe(
+            disp_df,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Existing URL":                st.column_config.TextColumn(width="medium"),
+                "Primary Keyword":             st.column_config.TextColumn(width="small"),
+                "Page Title":                  st.column_config.TextColumn(width="large"),
+                "Recommended Title":           st.column_config.TextColumn(width="large"),
+                "H1":                          st.column_config.TextColumn(width="medium"),
+                "Recommended H1":              st.column_config.TextColumn(width="medium"),
+                "First Sentence after H1":     st.column_config.TextColumn(width="large"),
+                "Recommended First Sentence":  st.column_config.TextColumn(width="large"),
+                "Notes":                       st.column_config.TextColumn(width="large"),
+            },
+        )
+
+        # Show any errors
+        errors = [r for r in results if r.get("Error")]
+        if errors:
+            with st.expander(f"⚠ {len(errors)} page(s) had errors"):
+                for r in errors:
+                    st.markdown(f"**{r['Existing URL']}**: {r['Error']}")
+
+        # Export
+        st.markdown("#### Step 4 — Export")
+        client_nm  = st.session_state.get("recs_client_name", "")
+        excel_bytes = build_onpage_excel(results, client_name=client_nm)
+        fname = f"onpage_recommendations_{datetime.now().strftime('%Y%m%d')}.xlsx"
+        st.download_button(
+            "📥 Export to Excel (.xlsx)",
+            data=excel_bytes,
+            file_name=fname,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
