@@ -261,6 +261,8 @@ defaults: dict = {
     # Results
     "display_df": None,
     "claude_error": "",
+    "analyze_v1_label": "",
+    "analyze_v2_label": "",
     # Keyword suggestion
     "target_keyword": "",
     "keyword_suggestion": "",
@@ -435,9 +437,9 @@ with tab_single:
 
             with col_field:
                 if multiline:
-                    st.text_area(label, value=text_val, height=80, disabled=True, key=f"disp_{key}")
+                    st.text_area(label, value=text_val, height=80, disabled=True)
                 else:
-                    st.text_input(label, value=text_val, disabled=True, key=f"disp_{key}")
+                    st.text_input(label, value=text_val, disabled=True)
 
             with col_score:
                 if score_info.get("entity"):
@@ -578,17 +580,31 @@ with tab_single:
                     st.error(f"Suggestion failed: {e}")
 
     if analyze_clicked:
-        if not any([original_text.strip(), variation_text_1.strip(), variation_text_2.strip()]):
+        # If a variation text box is empty, fall back to the selected source element
+        v1_source_label = st.session_state.get("variation_source_1", "Pasted text")
+        v2_source_label = st.session_state.get("variation_source_2", "Pasted text")
+        v1_source_key = _SOURCE_KEY_MAP[v1_source_label]
+        v2_source_key = _SOURCE_KEY_MAP[v2_source_label]
+        analyze_v1 = variation_text_1.strip() or st.session_state.get(v1_source_key, "").strip()
+        analyze_v2 = variation_text_2.strip() or st.session_state.get(v2_source_key, "").strip()
+
+        if not any([original_text.strip(), analyze_v1, analyze_v2]):
             st.error("Add some text to analyze first — paste text or load a URL.")
         else:
             with st.spinner("Scoring with Google NLP…"):
                 all_entities = {}
                 if original_text.strip():
                     all_entities["Original"] = analyze_text_salience(original_text)
-                if variation_text_1.strip():
-                    all_entities["Variation 1"] = analyze_text_salience(variation_text_1)
-                if variation_text_2.strip():
-                    all_entities["Variation 2"] = analyze_text_salience(variation_text_2)
+                if analyze_v1:
+                    all_entities["Variation 1"] = analyze_text_salience(analyze_v1)
+                    st.session_state["analyze_v1_label"] = v1_source_label
+                else:
+                    st.session_state["analyze_v1_label"] = ""
+                if analyze_v2:
+                    all_entities["Variation 2"] = analyze_text_salience(analyze_v2)
+                    st.session_state["analyze_v2_label"] = v2_source_label
+                else:
+                    st.session_state["analyze_v2_label"] = ""
 
             rows_list = []
             unique_entities = set(e for ents in all_entities.values() for e in ents)
@@ -669,8 +685,24 @@ with tab_single:
 
         st.markdown(SCORE_GUIDE, unsafe_allow_html=True)
 
-        score_cols = [c for c in ["Original", "Variation 1", "Variation 2"] if c in display_df.columns]
-        styled = display_df.style.map(style_score, subset=score_cols)
+        # Build display table with element labels in column headers
+        v1_lbl = st.session_state.get("analyze_v1_label", "")
+        v2_lbl = st.session_state.get("analyze_v2_label", "")
+        table_df = display_df.copy()
+        col_rename = {}
+        if v1_lbl and "Variation 1" in table_df.columns:
+            col_rename["Variation 1"] = f"Variation 1 — {v1_lbl}"
+        if v2_lbl and "Variation 2" in table_df.columns:
+            col_rename["Variation 2"] = f"Variation 2 — {v2_lbl}"
+        if col_rename:
+            table_df = table_df.rename(columns=col_rename)
+
+        score_cols = [c for c in table_df.columns if c in
+                      ["Original"] + list(col_rename.values()) +
+                      (["Variation 1"] if "Variation 1" in table_df.columns else []) +
+                      (["Variation 2"] if "Variation 2" in table_df.columns else [])]
+        score_cols = [c for c in table_df.columns if c not in ("Entity", "Type")]
+        styled = table_df.style.map(style_score, subset=score_cols)
 
         st.dataframe(
             styled,
@@ -679,11 +711,7 @@ with tab_single:
             on_select=assign_selected_entity,
             selection_mode="single-row",
             key="entity_table",
-            column_config={
-                "Original": st.column_config.NumberColumn(format="%.2f"),
-                "Variation 1": st.column_config.NumberColumn(format="%.2f"),
-                "Variation 2": st.column_config.NumberColumn(format="%.2f"),
-            },
+            column_config={c: st.column_config.NumberColumn(format="%.2f") for c in score_cols},
         )
 
         export_df = display_df.copy()
@@ -800,8 +828,12 @@ with tab_bulk:
 
     if st.session_state.get("bulk_results_df") is not None:
         bulk_df = st.session_state["bulk_results_df"]
-        bulk_score_cols = [c for c in bulk_df.columns if "Score" in c]
-        bulk_styled = bulk_df.style.map(style_score, subset=bulk_score_cols)
+        # Hide Error column when there are no errors
+        bulk_display = bulk_df.copy()
+        if "Error" in bulk_display.columns and bulk_display["Error"].fillna("").eq("").all():
+            bulk_display = bulk_display.drop(columns=["Error"])
+        bulk_score_cols = [c for c in bulk_display.columns if "Score" in c]
+        bulk_styled = bulk_display.style.map(style_score, subset=bulk_score_cols)
 
         st.dataframe(
             bulk_styled,
@@ -812,7 +844,7 @@ with tab_bulk:
 
         st.download_button(
             "Export Bulk Results to CSV",
-            data=bulk_df.to_csv(index=False).encode("utf-8"),
+            data=bulk_display.to_csv(index=False).encode("utf-8"),
             file_name="bulk_salience.csv",
             mime="text/csv",
         )
