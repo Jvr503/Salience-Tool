@@ -16,10 +16,11 @@ SCOPES = [
 
 
 def _creds():
+    secrets = getattr(st, "secrets", {})
     return (
-        os.getenv("GOOGLE_CLIENT_ID", ""),
-        os.getenv("GOOGLE_CLIENT_SECRET", ""),
-        os.getenv("REDIRECT_URI", "http://localhost:8501/"),
+        os.getenv("GOOGLE_CLIENT_ID") or secrets.get("GOOGLE_CLIENT_ID", ""),
+        os.getenv("GOOGLE_CLIENT_SECRET") or secrets.get("GOOGLE_CLIENT_SECRET", ""),
+        os.getenv("REDIRECT_URI") or secrets.get("REDIRECT_URI", "http://localhost:8501/"),
     )
 
 

@@ -6,10 +6,17 @@ from cryptography.fernet import Fernet
 
 DB_PATH = os.getenv("DB_PATH", "salience.db")
 
+def _get_secret(name: str, default: str = "") -> str:
+    try:
+        import streamlit as st
+        return os.getenv(name) or st.secrets.get(name, default)
+    except Exception:
+        return os.getenv(name, default)
+
 def _fernet():
-    key = os.getenv("DB_ENCRYPTION_KEY", "")
+    key = _get_secret("DB_ENCRYPTION_KEY")
     if not key:
-        raise RuntimeError("DB_ENCRYPTION_KEY is not set. Run: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\" and add it to .env")
+        raise RuntimeError("DB_ENCRYPTION_KEY is not set.")
     return Fernet(key.encode() if isinstance(key, str) else key)
 
 @contextmanager

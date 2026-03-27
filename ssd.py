@@ -28,8 +28,11 @@ db.seed_admin("javier.hernandez@propellic.com", "Javier Hernandez")
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-opus-4-6")
 
 def _get_anthropic_key() -> str:
-    """DB key takes precedence over .env fallback."""
-    return db.get_api_key("anthropic") or os.getenv("ANTHROPIC_API_KEY", "")
+    """DB key takes precedence; falls back to env var then st.secrets."""
+    from_db = db.get_api_key("anthropic")
+    if from_db:
+        return from_db
+    return os.getenv("ANTHROPIC_API_KEY") or st.secrets.get("ANTHROPIC_API_KEY", "")
 
 ANTHROPIC_API_KEY = _get_anthropic_key()
 
