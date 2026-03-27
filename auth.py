@@ -161,6 +161,7 @@ def _show_login():
             return
 
         auth_url = get_auth_url()
+        st.caption(f"Debug — client_id: `{client_id[:20]}...` | redirect: `{_creds()[2]}` | [auth url]({auth_url})")
         st.markdown(
             f'<a href="{auth_url}" target="_self" class="google-btn">'
             f'<img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" width="20">'
