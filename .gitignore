@@ -87,3 +87,6 @@ marimo/_lsp/
 __marimo__/.DS_Store
 get-pip.py
 ssd_WORKING_BACKUP.py
+
+salience.db
+.DS_Store

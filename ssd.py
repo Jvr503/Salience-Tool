@@ -16,11 +16,22 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from google.cloud import language_v1
 import anthropic
+import db
+import auth
 
 load_dotenv()
 
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+# ── DB init + admin seed ───────────────────────────────────────────────────────
+db.init_db()
+db.seed_admin("javier.hernandez@propellic.com", "Javier Hernandez")
+
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-opus-4-6")
+
+def _get_anthropic_key() -> str:
+    """DB key takes precedence over .env fallback."""
+    return db.get_api_key("anthropic") or os.getenv("ANTHROPIC_API_KEY", "")
+
+ANTHROPIC_API_KEY = _get_anthropic_key()
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -131,6 +142,12 @@ def copy_button(text: str, key: str = "") -> None:
         height=38,
     )
 
+
+# ── Auth gate ─────────────────────────────────────────────────────────────────
+_current_user = auth.require_auth()
+
+# Refresh API key each page load (picks up changes saved in admin panel)
+ANTHROPIC_API_KEY = _get_anthropic_key()
 
 # ── Credentials ───────────────────────────────────────────────────────────────
 
@@ -603,6 +620,49 @@ SCORE_GUIDE = """
 # TOP-LEVEL TABS
 # ══════════════════════════════════════════════════════════════════════════════
 
+# ── Sidebar: user info + logout ───────────────────────────────────────────────
+with st.sidebar:
+    if _current_user.get("picture"):
+        st.image(_current_user["picture"], width=48)
+    st.markdown(f"**{_current_user['name']}**")
+    st.caption(_current_user["email"])
+    st.caption(f"Role: {_current_user['role'].capitalize()}")
+    if st.button("Sign out", key="signout_main"):
+        auth.logout()
+    st.divider()
+    if auth.is_manager_or_above():
+        st.markdown("**History**")
+        _history = db.get_history(_current_user["email"], _current_user["role"])
+        if _history:
+            for _h in _history[:10]:
+                _dl_name, _dl_data = db.get_export_file(_h["id"], _current_user["email"], _current_user["role"])
+                if _dl_data:
+                    st.download_button(
+                        f"⬇ {_h['filename'][:28]}…" if len(_h["filename"]) > 30 else f"⬇ {_h['filename']}",
+                        data=_dl_data,
+                        file_name=_dl_name,
+                        key=f"sidebar_dl_{_h['id']}",
+                    )
+                    st.caption(f"{_h['user_email']} · {_h['created_at'][:16]}")
+        else:
+            st.caption("No exports yet.")
+    else:
+        st.markdown("**My Exports**")
+        _history = db.get_history(_current_user["email"], "user")
+        if _history:
+            for _h in _history[:10]:
+                _dl_name, _dl_data = db.get_export_file(_h["id"], _current_user["email"], "user")
+                if _dl_data:
+                    st.download_button(
+                        f"⬇ {_h['filename'][:28]}…" if len(_h["filename"]) > 30 else f"⬇ {_h['filename']}",
+                        data=_dl_data,
+                        file_name=_dl_name,
+                        key=f"sidebar_dl_{_h['id']}",
+                    )
+                    st.caption(_h["created_at"][:16])
+        else:
+            st.caption("No exports yet.")
+
 tab_single, tab_bulk, tab_recs = st.tabs(["Single Analysis", "Bulk Analysis", "On-Page Recommendations"])
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -970,10 +1030,13 @@ with tab_single:
         export_df = display_df.copy()
         page_url = st.session_state.get("page_url", "")
         export_df.insert(0, "URL", page_url if page_url.strip() else "—")
+        _csv_bytes = export_df.to_csv(index=False).encode("utf-8")
+        _csv_fname = f"salience_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        db.save_export(_current_user["email"], _csv_fname, "salience", _csv_bytes)
         st.download_button(
             "Export to CSV",
-            data=export_df.to_csv(index=False).encode("utf-8"),
-            file_name="salience_analysis.csv",
+            data=_csv_bytes,
+            file_name=_csv_fname,
             mime="text/csv",
         )
 
@@ -1095,10 +1158,13 @@ with tab_bulk:
             column_config={c: st.column_config.NumberColumn(format="%.2f") for c in bulk_score_cols},
         )
 
+        _bulk_bytes = bulk_display.to_csv(index=False).encode("utf-8")
+        _bulk_fname = f"bulk_salience_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        db.save_export(_current_user["email"], _bulk_fname, "bulk", _bulk_bytes)
         st.download_button(
             "Export Bulk Results to CSV",
-            data=bulk_display.to_csv(index=False).encode("utf-8"),
-            file_name="bulk_salience.csv",
+            data=_bulk_bytes,
+            file_name=_bulk_fname,
             mime="text/csv",
         )
 
@@ -1279,9 +1345,10 @@ with tab_recs:
 
         # Export
         st.markdown("#### Step 4 — Export")
-        client_nm  = st.session_state.get("recs_client_name", "")
+        client_nm   = st.session_state.get("recs_client_name", "")
         excel_bytes = build_onpage_excel(results, client_name=client_nm)
-        fname = f"onpage_recommendations_{datetime.now().strftime('%Y%m%d')}.xlsx"
+        fname       = f"onpage_recommendations_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        db.save_export(_current_user["email"], fname, "onpage", excel_bytes)
         st.download_button(
             "📥 Export to Excel (.xlsx)",
             data=excel_bytes,
