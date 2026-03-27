@@ -162,8 +162,8 @@ def _show_login():
 
         auth_url = get_auth_url()
         st.markdown(
-            f'<button onclick="window.top.location.href=\'{auth_url}\'" class="google-btn">'
+            f'<a href="{auth_url}" target="_blank" class="google-btn">'
             f'<img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" width="20">'
-            f'Sign in with Google</button>',
+            f'Sign in with Google</a>',
             unsafe_allow_html=True,
         )
