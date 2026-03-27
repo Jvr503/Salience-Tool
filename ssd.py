@@ -21,6 +21,21 @@ import auth
 
 load_dotenv()
 
+# ── Google Cloud credentials (write JSON from secret if running on Streamlit Cloud) ──
+def _setup_google_credentials():
+    creds_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+    if creds_path and os.path.exists(creds_path):
+        return  # local dev, file already exists
+    creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON") or st.secrets.get("GOOGLE_CREDENTIALS_JSON", "")
+    if creds_json:
+        import tempfile
+        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
+        tmp.write(creds_json)
+        tmp.flush()
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = tmp.name
+
+_setup_google_credentials()
+
 # ── DB init + admin seed ───────────────────────────────────────────────────────
 db.init_db()
 db.seed_admin("javier.hernandez@propellic.com", "Javier Hernandez")
