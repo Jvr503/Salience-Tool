@@ -26,9 +26,10 @@ def _setup_google_credentials():
     creds_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
     if creds_path and os.path.exists(creds_path):
         return  # local dev, file already exists
-    creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON") or st.secrets.get("GOOGLE_CREDENTIALS_JSON", "")
-    if creds_json:
-        import tempfile
+    creds_b64 = os.getenv("GOOGLE_CREDENTIALS_B64") or st.secrets.get("GOOGLE_CREDENTIALS_B64", "")
+    if creds_b64:
+        import tempfile, base64
+        creds_json = base64.b64decode(creds_b64).decode("utf-8")
         tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
         tmp.write(creds_json)
         tmp.flush()
